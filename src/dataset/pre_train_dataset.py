@@ -7,7 +7,8 @@ from pathlib import Path
 from typing import Any
 
 import torch
-from torch.utils.data import Dataset
+import torch.distributed as dist
+from torch.utils.data import Dataset, IterableDataset, get_worker_info
 
 logger = logging.getLogger(__name__)
 
@@ -212,3 +213,115 @@ class PreTrainDataset(Dataset):
             return chunks, False
 
         return chunks, False
+
+
+class StreamingPreTrainDataset(IterableDataset):
+    """预训练流式数据集：逐行读取 JSONL 并在线 packing，避免全量读入内存后再开训。"""
+
+    def __init__(
+        self,
+        data_path: str | Path,
+        tokenizer,
+        pack_bin_size: int,
+        pack_bin_schedule: list[Any] | None = None,
+    ) -> None:
+        self.data_path = str(data_path)
+        self.tokenizer = tokenizer
+        self._stages = _normalize_pack_bin_schedule(pack_bin_schedule, pack_bin_size)
+        self.pack_bin_size = max(s[1] for s in self._stages)
+        self._sep_id = int(tokenizer.convert_tokens_to_ids("<|endoftext|>"))
+
+    @staticmethod
+    def _shard_info() -> tuple[int, int]:
+        """返回 (shard_id, num_shards)，同时切分 DDP rank 与 dataloader workers。"""
+        worker = get_worker_info()
+        worker_id = worker.id if worker is not None else 0
+        num_workers = worker.num_workers if worker is not None else 1
+
+        rank = 0
+        world_size = 1
+        if dist.is_available() and dist.is_initialized():
+            rank = dist.get_rank()
+            world_size = dist.get_world_size()
+
+        shard_id = rank * num_workers + worker_id
+        num_shards = world_size * num_workers
+        return shard_id, max(1, num_shards)
+
+    def __iter__(self) -> Iterator[dict[str, torch.Tensor]]:
+        shard_id, num_shards = self._shard_info()
+
+        stage_idx = 0
+        emitted = 0
+        buffer: list[int] = []
+        seen_docs = 0
+        skipped_empty = 0
+        first_doc = True
+
+        def maybe_advance_stage() -> None:
+            nonlocal stage_idx
+            while stage_idx < len(self._stages) - 1:
+                until_excl, _sz = self._stages[stage_idx]
+                if until_excl is None or emitted < until_excl:
+                    break
+                stage_idx += 1
+
+        def current_chunk_size() -> int:
+            _until_excl, sz = self._stages[stage_idx]
+            return int(sz)
+
+        for i, row in enumerate(_iter_jsonl_objects(self.data_path)):
+            if (i % num_shards) != shard_id:
+                continue
+
+            text = row.get("text", "")
+            if not text or not str(text).strip():
+                skipped_empty += 1
+                continue
+
+            enc = self.tokenizer(
+                str(text),
+                add_special_tokens=False,
+                truncation=False,
+                padding=False,
+                verbose=False,
+            )
+            ids = enc["input_ids"]
+            if not ids:
+                skipped_empty += 1
+                continue
+
+            seen_docs += 1
+            if not first_doc:
+                buffer.append(self._sep_id)
+            buffer.extend(ids)
+            first_doc = False
+
+            maybe_advance_stage()
+            while len(buffer) >= current_chunk_size():
+                csz = current_chunk_size()
+                piece = buffer[:csz]
+                del buffer[:csz]
+                input_ids = torch.tensor(piece, dtype=torch.long)
+                labels = input_ids.clone()
+                yield {"input_ids": input_ids, "labels": labels}
+                emitted += 1
+                maybe_advance_stage()
+
+        # 语料结束后，尾段不足一个 chunk 仍产出一条短样本。
+        if buffer:
+            input_ids = torch.tensor(buffer, dtype=torch.long)
+            labels = input_ids.clone()
+            yield {"input_ids": input_ids, "labels": labels}
+            emitted += 1
+
+        logger.info(
+            "StreamingPreTrainDataset: docs=%s emitted=%s max_chunk=%s skipped_empty=%s shard=%s/%s stages=%s",
+            seen_docs,
+            emitted,
+            self.pack_bin_size,
+            skipped_empty,
+            shard_id,
+            num_shards,
+            self._stages,
+        )

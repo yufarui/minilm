@@ -10,7 +10,7 @@ from src.config.data_arguments import PretrainDataArguments
 from src.config.logging_config import setup_logging
 from src.config.model_config import MiniLMConfig
 from src.config.train_config import TrainConfig
-from src.dataset.pre_train_dataset import PreTrainDataset
+from src.dataset.pre_train_dataset import PreTrainDataset, StreamingPreTrainDataset
 from src.model.model import MiniLmForCausalLM
 from src.monitor.pretrain.build_callbacks import build_pretrain_trainer_callbacks
 from src.ref_model import get_auto_tokenizer_local
@@ -30,7 +30,7 @@ def run_pretrain(training_args: TrainingArguments, data_args: PretrainDataArgume
 
     pack_bin_size = data_args.pack_bin_size or data_args.max_seq_length
     train_data_path = resolve_under_project(data_args.train_data_path)
-    train_dataset = PreTrainDataset(
+    train_dataset = StreamingPreTrainDataset(
         train_data_path,
         tokenizer,
         pack_bin_size=pack_bin_size,
