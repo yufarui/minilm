@@ -1,11 +1,12 @@
 from __future__ import annotations
 
+import json
 import logging
+from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
 
 import torch
-from datasets import load_dataset
 from torch.utils.data import Dataset
 
 logger = logging.getLogger(__name__)
@@ -49,6 +50,25 @@ def _normalize_pack_bin_schedule(
     return out
 
 
+def _iter_jsonl_objects(path: str | Path) -> Iterator[dict[str, Any]]:
+    """逐行读取 JSONL，避免 ``datasets.load_dataset`` 在本地生成 Arrow 缓存占满磁盘。"""
+    p = Path(path)
+    with p.open(encoding="utf-8") as fp:
+        for lineno, line in enumerate(fp, 1):
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                obj = json.loads(line)
+            except json.JSONDecodeError as e:
+                raise ValueError(f"{p}:{lineno}: {e}") from e
+            if not isinstance(obj, dict):
+                raise TypeError(
+                    f"{p}:{lineno}: 每行须为 JSON 对象，收到 {type(obj).__name__}"
+                )
+            yield obj
+
+
 class PreTrainDataset(Dataset):
     """预训练：Token 流式 packing（标准长序列预训练）。
 
@@ -74,12 +94,11 @@ class PreTrainDataset(Dataset):
         self._stages = _normalize_pack_bin_schedule(pack_bin_schedule, pack_bin_size)
         self.pack_bin_size = max(s[1] for s in self._stages)
         sep_id = tokenizer.convert_tokens_to_ids("<|endoftext|>")
-        self.samples = load_dataset("json", data_files=self.data_path, split="train")
 
         doc_token_ids: list[list[int]] = []
         skipped_empty = 0
-        for i in range(len(self.samples)):
-            text = self.samples[i].get("text", "")
+        for row in _iter_jsonl_objects(self.data_path):
+            text = row.get("text", "")
             if not text or not str(text).strip():
                 skipped_empty += 1
                 continue
