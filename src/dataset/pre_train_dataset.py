@@ -10,6 +10,7 @@ from typing import Any
 import torch
 import torch.distributed as dist
 from datasets import load_from_disk
+import pyarrow.parquet as pq
 from torch.utils.data import IterableDataset, get_worker_info
 
 logger = logging.getLogger(__name__)
@@ -130,6 +131,18 @@ class PreTrainDataset(IterableDataset):
                 continue
             yield list(ids)
 
+    def _iter_token_ids_parquet(
+        self, shard_id: int, num_shards: int
+    ) -> Iterator[list[int]]:
+        pf = pq.ParquetFile(self.data_path)
+        global_idx = 0
+        for batch in pf.iter_batches(columns=["input_ids"], batch_size=2048):
+            col = batch.column(0).to_pylist()
+            for ids in col:
+                if global_idx % num_shards == shard_id and ids:
+                    yield list(ids)
+                global_idx += 1
+
     @staticmethod
     def _shard_info() -> tuple[int, int]:
         """返回 (shard_id, num_shards)，同时切分 DDP rank 与 dataloader workers。"""
@@ -171,11 +184,13 @@ class PreTrainDataset(IterableDataset):
 
         p = Path(self.data_path)
         use_arrow = p.is_dir() and (p / "dataset_info.json").exists()
-        ids_iter = (
-            self._iter_token_ids_arrow(shard_id, num_shards)
-            if use_arrow
-            else self._iter_token_ids_jsonl(shard_id, num_shards)
-        )
+        use_parquet = p.is_file() and p.suffix == ".parquet"
+        if use_arrow:
+            ids_iter = self._iter_token_ids_arrow(shard_id, num_shards)
+        elif use_parquet:
+            ids_iter = self._iter_token_ids_parquet(shard_id, num_shards)
+        else:
+            ids_iter = self._iter_token_ids_jsonl(shard_id, num_shards)
 
         ids_buffer: deque[list[int]] = deque(maxlen=10)
 
@@ -215,7 +230,7 @@ class PreTrainDataset(IterableDataset):
 
         logger.info(
             "PreTrainDataset(streaming): source=%s docs=%s emitted=%s max_chunk=%s skipped_empty=%s shard=%s/%s stages=%s",
-            "arrow" if use_arrow else "jsonl",
+            "arrow" if use_arrow else ("parquet" if use_parquet else "jsonl"),
             seen_docs,
             emitted,
             self.pack_bin_size,
