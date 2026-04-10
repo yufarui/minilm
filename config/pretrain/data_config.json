@@ -5,9 +5,9 @@
   "max_seq_length": 8192,
   "pack_bin_size": 8192,
   "pack_bin_schedule": [
-    {"until_index": 200000, "pack_bin_size": 2048},
-    {"until_index": 1200000, "pack_bin_size": 4096},
-    {"until_index": 3000000, "pack_bin_size": 6144},
+    {"until_index": 50000, "pack_bin_size": 2048},
+    {"until_index": 200000, "pack_bin_size": 4096},
+    {"until_index": 500000, "pack_bin_size": 6144},
     {"pack_bin_size": 8192}
   ],
   "pack_sort_order": "file_order",

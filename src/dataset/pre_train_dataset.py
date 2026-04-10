@@ -143,6 +143,21 @@ class PreTrainDataset(IterableDataset):
                     yield list(ids)
                 global_idx += 1
 
+    def _iter_token_ids_parquet_shards(
+        self, shard_id: int, num_shards: int, parquet_files: list[Path]
+    ) -> Iterator[list[int]]:
+        """按文件分配给 shard，尽量避免多个 worker 竞争同一 parquet 文件。"""
+        my_files = [f for i, f in enumerate(parquet_files) if i % num_shards == shard_id]
+        for file_path in my_files:
+            pf = pq.ParquetFile(str(file_path))
+            table = pf.read(columns=["input_ids"])
+            ids_array = table.column("input_ids")
+            for chunk in ids_array.chunks:
+                for i in range(len(chunk)):
+                    ids = chunk[i].as_py()
+                    if ids:
+                        yield list(ids)
+
     @staticmethod
     def _shard_info() -> tuple[int, int]:
         """返回 (shard_id, num_shards)，同时切分 DDP rank 与 dataloader workers。"""
@@ -183,11 +198,17 @@ class PreTrainDataset(IterableDataset):
             return int(sz)
 
         p = Path(self.data_path)
-        use_arrow = p.is_dir() and (p / "dataset_info.json").exists()
+        use_arrow = p.is_dir() and (p / "dataset_info.json").exists() and (p / "state.json").exists()
+        parquet_files = sorted(p.glob("*.parquet")) if p.is_dir() else []
         use_parquet = p.is_file() and p.suffix == ".parquet"
         if use_arrow:
             ids_iter = self._iter_token_ids_arrow(shard_id, num_shards)
+        elif parquet_files:
+            ids_iter = self._iter_token_ids_parquet_shards(shard_id, num_shards, parquet_files)
         elif use_parquet:
+            logger.warning(
+                "Using single parquet file with row-level sharding; this may cause I/O contention."
+            )
             ids_iter = self._iter_token_ids_parquet(shard_id, num_shards)
         else:
             ids_iter = self._iter_token_ids_jsonl(shard_id, num_shards)
@@ -230,7 +251,7 @@ class PreTrainDataset(IterableDataset):
 
         logger.info(
             "PreTrainDataset(streaming): source=%s docs=%s emitted=%s max_chunk=%s skipped_empty=%s shard=%s/%s stages=%s",
-            "arrow" if use_arrow else ("parquet" if use_parquet else "jsonl"),
+            "arrow" if use_arrow else ("parquet-shards" if parquet_files else ("parquet" if use_parquet else "jsonl")),
             seen_docs,
             emitted,
             self.pack_bin_size,
