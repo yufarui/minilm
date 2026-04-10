@@ -40,7 +40,7 @@ pip install -e ".[preprocess-full]"
 uv pip install -e ".[deepspeed,preprocess-full]"
 ```
 
-> **说明**：`fasttext` 的语言模型权重（如 `lid.176.bin`）不会随 pip 自动下载，需在配置中设置 `fasttext_model_path`（参见 `config/preprocess/sft.pipeline.job.example.yaml` 注释）。
+> **说明**：`fasttext` 的语言模型权重（如 `lid.176.bin`）不会随 pip 自动下载，需在配置中设置 `fasttext_model_path`（参见 `config/preprocess/sft.pipeline.job.yaml` 注释）。
 
 ## 仓库结构（简要）
 
@@ -61,8 +61,8 @@ uv pip install -e ".[deepspeed,preprocess-full]"
 2. **（可选）训练或更新 tokenizer**：`python -m src.tokenizer.train_tokenizer`（参数见脚本内说明）。
 3. **预处理**：编写任务 YAML，运行：
    ```bash
-   python -m src.preprocess.run_preprocess --config config/preprocess/pipeline.job.example.yaml
-   python -m src.preprocess.run_preprocess --config config/preprocess/sft.pipeline.job.example.yaml
+   python -m src.preprocess.run_preprocess --config config/preprocess/pipeline.job.yaml
+   python -m src.preprocess.run_preprocess --config config/preprocess/sft.pipeline.job.yaml
    ```
 4. **预训练**：
    ```bash

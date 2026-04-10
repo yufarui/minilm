@@ -6,7 +6,7 @@
 示例::
 
     python -m src.preprocess.run_preprocess --config config/preprocess/pipeline.job.yaml
-    python -m src.preprocess.run_preprocess --config config/preprocess/sft.pipeline.job.example.yaml
+    python -m src.preprocess.run_preprocess --config config/preprocess/sft.pipeline.job.yaml
 
 可选依赖：langdetect、datasketch、fasttext（SFT ``lang_backend: fasttext``）、bertopic（见 pyproject optional-dependencies）。
 """

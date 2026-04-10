@@ -32,7 +32,7 @@ class TrainDataArguments:
             "help": "分领域验证：指向「领域清单」JSON 文件路径（不是把所有领域混在一个数据文件里）。"
             "该 JSON 顶层为对象：键=领域名，值=该领域单独的 JSONL 数据路径。"
             "可与 eval_data_path 同时使用，此时主验证集会登记为键 eval。"
-            "Trainer 将分别报告 eval_<领域名>_loss。示例见 config/pretrain/eval_domains.example.json。"
+            "Trainer 将分别报告 eval_<领域名>_loss。示例见 config/pretrain/eval_domains.json。"
         },
     )
     tokenizer_name_or_path: str = field(

@@ -13,11 +13,11 @@
   "diag_num_eval_batches": 1,
   "diag_gen_every_n_steps": 500,
   "diag_gen_max_new_tokens": 64,
-  "diag_gen_prompts_json": "config/sft/diag_gen_prompts.example.json",
+  "diag_gen_prompts_json": "config/sft/diag_gen_prompts.json",
   "diag_gen_do_sample": false,
   "diag_gen_temperature": 0.8,
 
   "diag_sft_tool_json_every_n_steps": 500,
   "diag_sft_tool_json_max_new_tokens": 128,
-  "diag_sft_tool_json_prompts_json": "config/sft/diag_tool_json_prompts.example.json"
+  "diag_sft_tool_json_prompts_json": "config/sft/diag_tool_json_prompts.json"
 }
