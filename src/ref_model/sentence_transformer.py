@@ -2,15 +2,17 @@
 
 from __future__ import annotations
 
+from src.ref_model.modelscope_hub import resolve_model_dir
 from src.ref_model.registry import get_or_create
 
 
 def get_sentence_transformer(model_name: str):
-    key = ("sentence_transformer", model_name)
+    load_dir = resolve_model_dir(model_name)
+    key = ("sentence_transformer", load_dir)
 
     def load():
         from sentence_transformers import SentenceTransformer
 
-        return SentenceTransformer(model_name)
+        return SentenceTransformer(load_dir, local_files_only=True)
 
     return get_or_create(key, load)

@@ -9,6 +9,7 @@ from .dataset_test_utils import (
     PRETRAIN_JSONL,
     PRETRAIN_SCHEDULE_JSONL,
     SFT_JSONL,
+    SFT_TOOLS_STRING_JSONL,
     ensure_preprocess_tmp,
     load_local_tokenizer,
 )
@@ -92,3 +93,17 @@ def test_dpo_dataset_load_with_mock_jsonl() -> None:
     assert row["prompt"]
     assert row["chosen"]
     assert row["rejected"]
+
+
+def test_sft_dataset_loads_stringified_tools_and_tool_calls() -> None:
+    tok = load_local_tokenizer()
+    # 需足够大：system tools 定义较长，过小会在 tool 回复前被截断，解码中看不到 "69"。
+    ds = SFTDataset(SFT_TOOLS_STRING_JSONL, tok, pack_bin_size=4096)
+    assert len(ds) > 0
+    encoded = ds[0]
+    print("encoded\n", encoded)
+    text = tok.decode(encoded["input_ids"].tolist())
+    print("text\n", text)
+    # tools/tool_calls 为字符串 JSON 时也应可被解析并编码进模板文本。
+    assert ("random_number" in text) or ("get_exchange_rate" in text)
+    assert "69" in text

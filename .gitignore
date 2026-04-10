@@ -41,9 +41,6 @@ ENV/
 tmp/
 temp/
 
-# Test generated artifacts
-tests/tmp/
-
 # Local model / dataset outputs (usually large)
 outputs/
 runs/

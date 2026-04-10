@@ -40,14 +40,16 @@ pipeline:
     num_perm: 128 # MinHash 排列数，越大越准但更慢、更占内存
     shingle_size: 5 # 词级 n-gram（连续词窗长度）
 
+  # 无外网 / Errno 101：设 false，或将模型下载到本地目录后把 ppl.model_name 改为该路径
   ppl_enable: true
   ppl_apply_percentile_filter: false
   # 仅在 ppl_enable=true 且计算出 _ppl 时生效：按 (ppl, length) 从低到高重排输出
   ppl_sort_ascending: true 
 
   # 困惑度模型（仅当开启 ppl 相关选项时生效）
+  # model_name：ModelScope 模型 id，或相对项目根的本地目录（须含 config.json）
   ppl:
-    model_name: gpt2
+    model_name: AI-ModelScope/gpt2
     max_length: 1024
     device: null
 

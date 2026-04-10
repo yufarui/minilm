@@ -11,6 +11,8 @@ PRETRAIN_JSONL = PREPROCESS_TMP_ROOT / "pretrain_pipeline" / "pretrain_output.js
 SFT_JSONL = PREPROCESS_TMP_ROOT / "sft_pipeline" / "sft_output.jsonl"
 DPO_JSONL = TESTS_ROOT / "tmp" / "dataset" / "dpo_mock.jsonl"
 PRETRAIN_SCHEDULE_JSONL = TESTS_ROOT / "tmp" / "dataset" / "pretrain_schedule_input.jsonl"
+# SFTDataset：system.tools / assistant.tool_calls 为 JSON 字符串的样例（由 test_dataset_loading 写入）
+SFT_TOOLS_STRING_JSONL = TESTS_ROOT / "tmp" / "dataset" / "sft_tools_string_sample.jsonl"
 LOCAL_TOKENIZER_DIR = PROJECT_ROOT / "tokenizer" / "minilm"
 
 

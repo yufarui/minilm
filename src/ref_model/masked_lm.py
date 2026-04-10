@@ -6,6 +6,7 @@ from dataclasses import dataclass
 
 import torch
 
+from src.ref_model.modelscope_hub import resolve_model_dir
 from src.ref_model.registry import get_or_create
 
 
@@ -21,13 +22,14 @@ def _resolve_device(device: str | None) -> str:
 
 def get_masked_lm_reference(model_name: str, device: str | None) -> MaskedLMReference:
     dev = _resolve_device(device)
-    key = ("masked_lm", model_name, dev)
+    load_dir = resolve_model_dir(model_name)
+    key = ("masked_lm", load_dir, dev)
 
     def load() -> MaskedLMReference:
         from transformers import AutoModelForMaskedLM, AutoTokenizer
 
-        tok = AutoTokenizer.from_pretrained(model_name)
-        model = AutoModelForMaskedLM.from_pretrained(model_name)
+        tok = AutoTokenizer.from_pretrained(load_dir, local_files_only=True)
+        model = AutoModelForMaskedLM.from_pretrained(load_dir, local_files_only=True)
         model.to(dev)
         model.eval()
         return MaskedLMReference(tokenizer=tok, model=model)
