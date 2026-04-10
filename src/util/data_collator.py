@@ -122,7 +122,7 @@ class TrainDataCollator:
 
     def _packing_prefix_attn_mask(self, input_ids: torch.Tensor, labels: torch.Tensor, ) -> torch.Tensor:
         seq_len = input_ids.shape[0]
-        prefix_attn_mask = torch.zeros(seq_len, seq_len, dtype=torch.long, device=input_ids.device)
+        prefix_attn_mask = torch.zeros(seq_len, seq_len, dtype=torch.bool, device=input_ids.device)
 
         label_blocks = self.label_block(input_ids, labels)
 
@@ -131,12 +131,12 @@ class TrainDataCollator:
             if block_type == "causal":
                 seg_len = seg_end - seg_start
                 prefix_attn_mask[seg_start: seg_end, seg_start: seg_end] = (
-                    torch.tril(torch.ones(seg_len, seg_len, dtype=torch.long, device=input_ids.device), diagonal=0)
+                    torch.tril(torch.ones(seg_len, seg_len, dtype=torch.bool, device=input_ids.device), diagonal=0)
                 )
             elif block_type == "prefix":
                 # 下一个block有且必然是causal,这是我们约定的
                 next_seg_end = label_blocks[index + 1][1]
-                prefix_attn_mask[seg_start: next_seg_end, seg_start: seg_end] = 1
+                prefix_attn_mask[seg_start: next_seg_end, seg_start: seg_end] = True
         return prefix_attn_mask
 
     def label_block(self, input_ids, labels):
