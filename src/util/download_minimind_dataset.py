@@ -4,30 +4,47 @@ from pathlib import Path
 
 from modelscope.hub.snapshot_download import snapshot_download
 
-def download_dataset_file(dataset_id: str, target_file_path: Path, allow_file_pattern: str) :
-    target_file_path.parent.mkdir(parents=True, exist_ok=True)
-    print("[1/2] Downloading file by ModelScope SDK...")
+def _matched_files(local_dir: Path, patterns: list[str]) -> list[Path]:
+    files: list[Path] = []
+    for pattern in patterns:
+        files.extend([p for p in local_dir.rglob(pattern) if p.is_file()])
+    # Deduplicate while preserving order.
+    return list(dict.fromkeys(files))
+
+
+def download_dataset_file(dataset_id: str, target_dir: Path, allow_file_patterns: list[str]) -> None:
+    target_dir.mkdir(parents=True, exist_ok=True)
+    print("[1/3] Downloading files by ModelScope SDK...")
     local_dir = Path(
         snapshot_download(
             dataset_id,
             repo_type="dataset",
-            local_dir=str(target_file_path),
-            allow_file_pattern=allow_file_pattern,
+            local_dir=str(target_dir),
+            allow_file_pattern=allow_file_patterns,
         )
     )
-    print("[2/2] Done")
+    print("[2/3] Verifying downloaded files...")
+    files = _matched_files(local_dir, allow_file_patterns)
+    if not files:
+        raise FileNotFoundError(
+            "Download finished but no files matched the requested patterns: "
+            f"{allow_file_patterns}. Please check dataset file names."
+        )
+    print("[3/3] Done")
     print(f"  - Dataset: {dataset_id}")
     print(f"  - Download directory: {local_dir}")
-    print(f"  - Target file name: {target_file_path.name}")
+    print("  - Matched files:")
+    for file in files:
+        print(f"    - {file}")
 
 
 def main() -> None:
     root = Path(__file__).resolve().parents[2]
-    target_file_path = root / "data" / "pretrain"
+    target_dir = root / "data" / "pretrain"
     download_dataset_file(
         dataset_id="gongjy/minimind_dataset",
-        target_file_path=target_file_path,
-        allow_file_pattern=f"**/pretrain_t2t.jsonl",
+        target_dir=target_dir,
+        allow_file_patterns=["**/pretrain_t2t_mini.jsonl"],
     )
 
 
