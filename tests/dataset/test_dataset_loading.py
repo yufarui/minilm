@@ -72,6 +72,9 @@ def test_sft_dataset_load_from_preprocess_tmp() -> None:
 
     sample = ds[0]
 
+    print("sample\n", sample)
+    print("decode\n", tok.decode(sample["input_ids"]))
+
     assert "input_ids" in sample and "labels" in sample
     assert sample["input_ids"].shape == sample["labels"].shape
 
