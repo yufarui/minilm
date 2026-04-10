@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from transformers import TrainerCallback
 
+from src.monitor.common.rank_util import is_main_process
+
 
 class SftSplitLossMirrorCallback(TrainerCallback):
     """
@@ -13,6 +15,8 @@ class SftSplitLossMirrorCallback(TrainerCallback):
     """
 
     def on_log(self, args, state, control, logs=None, **kwargs):
+        if not is_main_process():
+            return
         if not logs:
             return
         for k in ("loss_text", "loss_tool", "loss_think"):

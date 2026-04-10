@@ -10,6 +10,8 @@ from typing import Any, List, Optional
 import torch
 from transformers import TrainerCallback, TrainerControl, TrainerState, TrainingArguments
 
+from src.monitor.common.rank_util import is_main_process
+
 logger = logging.getLogger(__name__)
 
 
@@ -94,6 +96,8 @@ class SftToolJsonGenerationProbeCallback(TrainerCallback):
         model: Optional[torch.nn.Module] = None,
         **kwargs: Any,
     ) -> None:
+        if not is_main_process():
+            return
         if logs is None or self.every_n_steps <= 0:
             return
         step = int(state.global_step)

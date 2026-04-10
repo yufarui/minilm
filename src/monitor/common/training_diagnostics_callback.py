@@ -13,6 +13,8 @@ from typing import Any, Dict, List, Optional
 import torch
 from transformers import TrainerCallback, TrainerControl, TrainerState, TrainingArguments
 
+from src.monitor.common.rank_util import is_main_process
+
 logger = logging.getLogger(__name__)
 
 
@@ -150,6 +152,8 @@ class TrainingDiagnosticsCallback(TrainerCallback):
         model: Optional[torch.nn.Module] = None,
         **kwargs: Any,
     ) -> None:
+        if not is_main_process():
+            return
         if logs is None:
             return
         step = int(state.global_step)

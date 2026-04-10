@@ -3,6 +3,8 @@ from __future__ import annotations
 import torch
 from transformers import TrainerCallback
 
+from src.monitor.common.rank_util import is_main_process
+
 
 class LossNormalizeCallback(TrainerCallback):
     """将日志中的 loss 归一化到每个 micro-step。"""
@@ -11,6 +13,8 @@ class LossNormalizeCallback(TrainerCallback):
         self.grad_accum_steps = max(int(grad_accum_steps), 1)
 
     def on_log(self, args, state, control, logs=None, **kwargs):
+        if not is_main_process():
+            return
         if not logs or "loss" not in logs:
             return
         try:
@@ -48,6 +52,8 @@ class GradNormPostClipCallback(TrainerCallback):
         self.last_post_clip_grad_norm = self._total_grad_norm(model)
 
     def on_log(self, args, state, control, logs=None, **kwargs):
+        if not is_main_process():
+            return
         if logs is None or self.last_post_clip_grad_norm is None:
             return
         logs["grad_norm_post_clip"] = self.last_post_clip_grad_norm

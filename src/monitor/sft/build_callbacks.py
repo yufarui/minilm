@@ -13,6 +13,7 @@ from src.monitor.common.training_diagnostics_callback import (
     TrainingDiagnosticsCallback,
     pick_probe_eval_dataset,
 )
+from src.monitor.common.rank_util import is_main_process
 from src.monitor.sft.split_loss_callback import SftSplitLossMirrorCallback
 from src.monitor.sft.tool_json_probe import SftToolJsonGenerationProbeCallback
 from src.util.path_util import resolve_under_project
@@ -30,7 +31,11 @@ def build_sft_trainer_callbacks(
     cbs: list[TrainerCallback] = [LossNormalizeCallback(training_args.gradient_accumulation_steps),
                                   GradNormPostClipCallback(), SftSplitLossMirrorCallback()]
 
-    if data_args.diag_every_n_steps > 0 and pick_probe_eval_dataset(eval_dataset) is None:
+    if (
+        is_main_process()
+        and data_args.diag_every_n_steps > 0
+        and pick_probe_eval_dataset(eval_dataset) is None
+    ):
         logger.warning("diag_every_n_steps>0 但未配置可用验证集，SFT top-1/熵诊断将跳过")
 
     gen_prompts = None

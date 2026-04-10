@@ -8,6 +8,7 @@ import swanlab
 from transformers import TrainerCallback, TrainerControl, TrainerState, TrainingArguments
 
 from src.model.moe import Moe
+from src.monitor.common.rank_util import is_main_process
 
 
 def _unwrap_model(model: torch.nn.Module) -> torch.nn.Module:
@@ -98,6 +99,8 @@ class MiniLMSwanlabDiagCallback(TrainerCallback):
             **kwargs: Any,
     ) -> None:
 
+        if not is_main_process():
+            return
         if swanlab.get_run() is None or logs is None:
             return
 
