@@ -2,13 +2,15 @@ from __future__ import annotations
 
 import json
 import logging
+from collections import deque
 from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
 
 import torch
 import torch.distributed as dist
-from torch.utils.data import Dataset, IterableDataset, get_worker_info
+from datasets import load_from_disk
+from torch.utils.data import IterableDataset, get_worker_info
 
 logger = logging.getLogger(__name__)
 
@@ -70,153 +72,9 @@ def _iter_jsonl_objects(path: str | Path) -> Iterator[dict[str, Any]]:
             yield obj
 
 
-class PreTrainDataset(Dataset):
-    """预训练：Token 流式 packing（标准长序列预训练）。
-
-    按 **JSONL 文件中文档出现顺序**（与 preprocess 写出顺序一致）依次读取，将所有文档首尾相接成
-    **一条 Token 流**，相邻文档之间只插入 **一个** ``<|endoftext|>`` 分隔符，
-    再按桶容量做**硬截断**：从流头起每 ``pack_bin_size``（或 ``pack_bin_schedule`` 中各阶段长度）个
-    token 切成一条样本；句子/文档可任意跨越桶边界。最后一段允许短于阶段块长，
-    后续由 data collator 动态 padding。
-
-    ``pack_bin_schedule``：表示「已产出样本数达到 until_index 前用该阶段块长」，流上读指针连续推进，
-    不在阶段边界对齐到文档边界。
-    """
-
-    def __init__(
-        self,
-        data_path: str | Path,
-        tokenizer,
-        pack_bin_size: int,
-        pack_bin_schedule: list[Any] | None = None,
-    ):
-        self.data_path = str(data_path)
-        self.tokenizer = tokenizer
-        self._stages = _normalize_pack_bin_schedule(pack_bin_schedule, pack_bin_size)
-        self.pack_bin_size = max(s[1] for s in self._stages)
-        sep_id = tokenizer.convert_tokens_to_ids("<|endoftext|>")
-
-        doc_token_ids: list[list[int]] = []
-        skipped_empty = 0
-        for row in _iter_jsonl_objects(self.data_path):
-            text = row.get("text", "")
-            if not text or not str(text).strip():
-                skipped_empty += 1
-                continue
-            enc = tokenizer(
-                str(text),
-                add_special_tokens=False,
-                truncation=False,
-                padding=False,
-            )
-            ids = enc["input_ids"]
-            if not ids:
-                skipped_empty += 1
-                continue
-            doc_token_ids.append(ids)
-
-        token_stream = PreTrainDataset._build_token_stream(doc_token_ids, int(sep_id))
-        packed, stream_exhausted_early = PreTrainDataset._stream_pack_staged(token_stream, self._stages)
-        if stream_exhausted_early:
-            logger.warning(
-                "PreTrainDataset：Token 流在达到 pack_bin_schedule 全部阶段前已耗尽，"
-                "后续阶段未再产出样本（可检查语料量或 schedule）"
-            )
-
-        self._packed: list[dict[str, torch.Tensor]] = []
-        for b in packed:
-            input_ids = torch.tensor(b, dtype=torch.long)
-            labels = input_ids.clone()
-            self._packed.append({"input_ids": input_ids, "labels": labels})
-
-        stream_tokens = len(token_stream)
-        if pack_bin_schedule:
-            logger.info(
-                "PreTrainDataset stream packing (staged): raw_docs=%s stream_tokens=%s samples=%s "
-                "max_chunk=%s skipped_empty=%s stages=%s",
-                len(doc_token_ids),
-                stream_tokens,
-                len(self._packed),
-                self.pack_bin_size,
-                skipped_empty,
-                self._stages,
-            )
-        else:
-            logger.info(
-                "PreTrainDataset stream packing: raw_docs=%s stream_tokens=%s samples=%s "
-                "pack_bin_size=%s skipped_empty=%s",
-                len(doc_token_ids),
-                stream_tokens,
-                len(self._packed),
-                self.pack_bin_size,
-                skipped_empty,
-            )
-
-    def __len__(self) -> int:
-        return len(self._packed)
-
-    def __getitem__(self, index: int) -> dict[str, torch.Tensor]:
-        return self._packed[index]
-
-    @staticmethod
-    def _build_token_stream(doc_token_ids: list[list[int]], sep_token_id: int) -> list[int]:
-        """所有文档 token 首尾相接，相邻文档之间只插一个分隔符（不占文档前导）。"""
-        stream: list[int] = []
-        first = True
-        for ids in doc_token_ids:
-            if not ids:
-                continue
-            if not first:
-                stream.append(sep_token_id)
-            stream.extend(ids)
-            first = False
-        return stream
-
-    @staticmethod
-    def _stream_pack_staged(
-        stream: list[int],
-        stages: list[tuple[int | None, int]],
-    ) -> tuple[list[list[int]], bool]:
-        """
-        从流头连续切分；第二项为 True 表示在某 until 阶段尚未凑满约定样本数时流已耗尽。
-        注意：此处不做样本内右侧补齐，样本可变长；padding 由 collator 统一动态处理。
-        """
-        n = len(stream)
-        pos = 0
-        chunks: list[list[int]] = []
-        emitted = 0
-
-        for until_excl, chunk_size in stages:
-            if chunk_size <= 0:
-                raise ValueError(f"stream pack chunk_size 须为正，收到 {chunk_size}")
-
-            if until_excl is not None:
-                need = until_excl - emitted
-                if need <= 0:
-                    continue
-                for _ in range(need):
-                    if pos >= n:
-                        return chunks, True
-                    end = pos + chunk_size
-                    piece = stream[pos:end]
-                    pos = end
-                    chunks.append(list(piece))
-                    emitted += 1
-                continue
-
-            while pos < n:
-                end = pos + chunk_size
-                piece = stream[pos:end]
-                pos = end
-                chunks.append(list(piece))
-                emitted += 1
-            return chunks, False
-
-        return chunks, False
-
-
-class StreamingPreTrainDataset(IterableDataset):
-    """预训练流式数据集：逐行读取 JSONL 并在线 packing，避免全量读入内存后再开训。"""
+class PreTrainDataset(IterableDataset):
+    """预训练流式数据集：支持 JSONL 在线分词，或直接读取预 tokenized Arrow 数据。"""
+    _arrow_dataset_cache: dict[str, Any] = {}
 
     def __init__(
         self,
@@ -230,6 +88,47 @@ class StreamingPreTrainDataset(IterableDataset):
         self._stages = _normalize_pack_bin_schedule(pack_bin_schedule, pack_bin_size)
         self.pack_bin_size = max(s[1] for s in self._stages)
         self._sep_id = int(tokenizer.convert_tokens_to_ids("<|endoftext|>"))
+        self._use_fast = bool(getattr(tokenizer, "is_fast", False))
+        self._fast_tokenizer = None
+        if self._use_fast:
+            # 优先直接走底层 tokenizers 接口，减少 Python 层封装开销。
+            self._fast_tokenizer = getattr(tokenizer, "_tokenizer", None)
+
+    def _iter_token_ids_jsonl(
+        self, shard_id: int, num_shards: int
+    ) -> Iterator[list[int]]:
+        for i, row in enumerate(_iter_jsonl_objects(self.data_path)):
+            if (i % num_shards) != shard_id:
+                continue
+            text = row.get("text", "")
+            if not text or not str(text).strip():
+                continue
+            text = str(text)
+            if self._use_fast and self._fast_tokenizer is not None:
+                ids = self._fast_tokenizer.encode(text, add_special_tokens=False).ids
+            else:
+                enc = self.tokenizer.encode(text, add_special_tokens=False)
+                ids = enc if isinstance(enc, list) else list(enc)
+            if ids:
+                yield ids
+
+    def _iter_token_ids_arrow(
+        self, shard_id: int, num_shards: int
+    ) -> Iterator[list[int]]:
+        ds = PreTrainDataset._arrow_dataset_cache.get(self.data_path)
+        if ds is None:
+            ds = load_from_disk(self.data_path)
+            PreTrainDataset._arrow_dataset_cache[self.data_path] = ds
+        if "input_ids" not in ds.column_names:
+            raise KeyError(
+                f"{self.data_path} 缺少 input_ids 列，请先执行预 tokenization。"
+            )
+        shard = ds.shard(num_shards=num_shards, index=shard_id, contiguous=False)
+        for row in shard:
+            ids = row.get("input_ids")
+            if not ids:
+                continue
+            yield list(ids)
 
     @staticmethod
     def _shard_info() -> tuple[int, int]:
@@ -270,26 +169,25 @@ class StreamingPreTrainDataset(IterableDataset):
             _until_excl, sz = self._stages[stage_idx]
             return int(sz)
 
-        for i, row in enumerate(_iter_jsonl_objects(self.data_path)):
-            if (i % num_shards) != shard_id:
-                continue
+        p = Path(self.data_path)
+        use_arrow = p.is_dir() and (p / "dataset_info.json").exists()
+        ids_iter = (
+            self._iter_token_ids_arrow(shard_id, num_shards)
+            if use_arrow
+            else self._iter_token_ids_jsonl(shard_id, num_shards)
+        )
 
-            text = row.get("text", "")
-            if not text or not str(text).strip():
-                skipped_empty += 1
-                continue
+        ids_buffer: deque[list[int]] = deque(maxlen=10)
 
-            enc = self.tokenizer(
-                str(text),
-                add_special_tokens=False,
-                truncation=False,
-                padding=False,
-                verbose=False,
-            )
-            ids = enc["input_ids"]
-            if not ids:
-                skipped_empty += 1
-                continue
+        def buffered_ids_iter() -> Iterator[list[int]]:
+            for ids in ids_iter:
+                ids_buffer.append(ids)
+                if len(ids_buffer) >= 5:
+                    yield ids_buffer.popleft()
+            while ids_buffer:
+                yield ids_buffer.popleft()
+
+        for ids in buffered_ids_iter():
 
             seen_docs += 1
             if not first_doc:
@@ -316,7 +214,8 @@ class StreamingPreTrainDataset(IterableDataset):
             emitted += 1
 
         logger.info(
-            "StreamingPreTrainDataset: docs=%s emitted=%s max_chunk=%s skipped_empty=%s shard=%s/%s stages=%s",
+            "PreTrainDataset(streaming): source=%s docs=%s emitted=%s max_chunk=%s skipped_empty=%s shard=%s/%s stages=%s",
+            "arrow" if use_arrow else "jsonl",
             seen_docs,
             emitted,
             self.pack_bin_size,

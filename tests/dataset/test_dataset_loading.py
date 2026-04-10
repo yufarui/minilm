@@ -1,4 +1,5 @@
 import pytest
+from itertools import islice
 
 from src.dataset.dpo_dataset import DPODataset
 from src.dataset.pre_train_dataset import PreTrainDataset
@@ -19,8 +20,7 @@ def test_pretrain_dataset_load_from_preprocess_tmp() -> None:
     ensure_preprocess_tmp()
     tok = load_local_tokenizer()
     ds = PreTrainDataset(PRETRAIN_JSONL, tok, pack_bin_size=64)
-    assert len(ds) > 0
-    sample = ds[0]
+    sample = next(iter(ds))
     assert "input_ids" in sample and "labels" in sample
     assert sample["input_ids"].shape == sample["labels"].shape
 
@@ -42,16 +42,17 @@ def test_pretrain_dataset_pack_bin_schedule() -> None:
             {"pack_bin_size": 16},
         ],
     )
-    assert len(ds) >= 3
     assert ds.pack_bin_size == 16
 
+    first_three = list(islice(iter(ds), 3))
+    assert len(first_three) == 3
+
     # 前两条由第一阶段产出，应严格按 8 token 切分。
-    assert ds[0]["input_ids"].shape[0] == 8
-    assert ds[1]["input_ids"].shape[0] == 8
+    assert first_three[0]["input_ids"].shape[0] == 8
+    assert first_three[1]["input_ids"].shape[0] == 8
 
     # 后续阶段块长为 16，最后一条允许短于 16。
-    for i in range(2, len(ds)):
-        assert 0 < ds[i]["input_ids"].shape[0] <= 16
+    assert 0 < first_three[2]["input_ids"].shape[0] <= 16
 
 
 def test_sft_dataset_load_from_preprocess_tmp() -> None:
