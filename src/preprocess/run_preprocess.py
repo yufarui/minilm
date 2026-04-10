@@ -17,6 +17,7 @@ import argparse
 import logging
 import sys
 
+from src.config.logging_config import setup_logging
 from src.preprocess.job_config import PreprocessJobFile
 from src.preprocess.split_dataset import (
     iter_jsonl,
@@ -40,7 +41,7 @@ def _build_parser() -> argparse.ArgumentParser:
 
 
 def main(argv: list[str] | None = None) -> int:
-    logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
+    setup_logging()
     args = _build_parser().parse_args(argv)
 
     job = PreprocessJobFile.load(args.config)

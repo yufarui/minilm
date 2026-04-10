@@ -23,6 +23,11 @@ pipeline:
     max_chars: 200000
     truncate: true 
     allowed_langs: ["zh-cn", "en"]
+    lang_backend: fasttext
+    # lang_backend=fasttext 时必须提供语言识别模型（例如 lid.176.bin）。
+    # 可先下载到 third_party/lid.176.bin，再使用下面路径。
+    fasttext_model_path: third_party/lid.176.bin
+    min_lang_confidence: 0.0
     max_punctuation_ratio: 0.55 # 标点占比超过则丢弃
 
   intra_doc_dedupe_paragraphs: true # 文档内段落级去重

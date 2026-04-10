@@ -27,7 +27,17 @@ def predict_lang_fasttext(
 
     m = get_fasttext_model(model_path)
     t = text.replace("\n", " ")[:5000]
-    labels, scores = m.predict(t, k=max(int(k), 1))
+    try:
+        labels, scores = m.predict(t, k=max(int(k), 1))
+    except ValueError as e:
+        msg = str(e)
+        if "Unable to avoid copy while creating an array as requested" in msg:
+            raise RuntimeError(
+                "Detected fasttext + NumPy 2.x incompatibility. "
+                "Please install NumPy < 2 in this environment, e.g. "
+                "`uv pip install \"numpy<2\"` or `pip install \"numpy<2\"`."
+            ) from e
+        raise
     out: list[str] = []
     thr = max(float(min_confidence), 0.0)
     for lb, sc in zip(labels, scores, strict=False):

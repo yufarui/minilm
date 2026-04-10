@@ -117,14 +117,14 @@ uv pip install -e ".[deepspeed,preprocess-full]"
 
 ```bash
 # 0) 安装
-uv sync
+uv sync --all-extras
 
 pip install -e ".[deepspeed,preprocess-full]"
 
 # 1) 数据准备（先按 data/README.md 放好原始 JSONL）
 
 # 2) tokenizer（可选：若要重训 tokenizer）
-bash scripts/collect_tokenizer_corpus.sh --pretrain-jsonl data/pretrain/train.jsonl --sft-jsonl data/sft/sft_t2t_mini.jsonl
+bash scripts/collect_tokenizer_corpus.sh --pretrain-jsonl data/pretrain/pretrain_t2t.jsonl --sft-jsonl data/sft/sft_t2t_mini.jsonl
 bash scripts/train_tokenizer.sh
 
 # 3) 清洗与切分

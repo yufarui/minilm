@@ -7,7 +7,7 @@ class MiniLMConfig(PretrainedConfig):
     def __init__(
             self,
             # ===== 词表 =====
-            vocab_size: int = 16000,
+            vocab_size: int = 16027,
             pad_token_id: int = 0,
 
             # ===== 基础结构 =====

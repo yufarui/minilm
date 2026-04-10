@@ -125,28 +125,6 @@ class TokenizerTrainer:
         )
 
     @staticmethod
-    def dump_plain_text(data_path: str, output_path: str, row_range: list | None = None):
-        """将 jsonl 转为纯文本，供 BPE 训练。"""
-        with open(data_path, 'r', encoding='utf-8') as fin, \
-                open(output_path, 'w', encoding='utf-8') as fout:
-
-            for i, line in enumerate(fin):
-                if row_range and i < row_range[0]:
-                    continue
-                if row_range and i >= row_range[1]:
-                    break
-                try:
-                    data = json.loads(line)
-                    text = data.get("text", "")
-                    if text:
-                        fout.write(text.strip() + "\n")
-                except Exception as e:
-                    print(f"⚠️ Error parsing json: {line}", e)
-                    continue
-
-        print(f"Dumped plain text to {output_path}")
-
-    @staticmethod
     def train_bbpe(input_path: str, tokenizer_dir: str, vocab_size: int = 16000) -> None:
         os.makedirs(tokenizer_dir, exist_ok=True)
 
@@ -228,16 +206,11 @@ class TokenizerTrainer:
 
 def main() -> None:
     project_root = Path(__file__).resolve().parents[2]
-    data_path = project_root / "data/pretrain/pretrain_t2t_mini.jsonl"
+
     tokenizer_dir = project_root / "tokenizer/minilm"
     os.makedirs(tokenizer_dir, exist_ok=True)
     plain_text_path = tokenizer_dir / "train_tokenizer.txt"
 
-    TokenizerTrainer.dump_plain_text(
-        str(data_path),
-        str(plain_text_path),
-        row_range=[0, 10_000],
-    )
     TokenizerTrainer.train_bbpe(
         input_path=str(plain_text_path),
         tokenizer_dir=str(tokenizer_dir),

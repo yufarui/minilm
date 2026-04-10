@@ -11,14 +11,14 @@ from src.ref_model import get_auto_tokenizer_local
 
 """
 本文件执行脚本
-python -m src.tokenizer.collect_tokenizer_corpus \
-  --pretrain-jsonl data/pretrain_t2t_mini.jsonl \
-  --sft-jsonl data/grpo/rlaif.jsonl \
-  --tokenizer-path tokenizer/minilm \
-  --output-path tokenizer/minilm/train_tokenizer.txt \
-  --max-pretrain-rows 800000 \
-  --max-sft-rows 200000 \
-  --sft-tool-sample-ratio 0.2 \
+uv run src/tokenizer/collect_tokenizer_corpus.py   
+  --pretrain-jsonl data/pretrain/pretrain_t2t.jsonl
+  --sft-jsonl data/sft/sft_t2t_mini.jsonl
+  --tokenizer-path tokenizer/minilm
+  --output-path tokenizer/minilm/train_tokenizer.txt
+  --max-pretrain-rows 800000
+  --max-sft-rows 200000
+  --sft-tool-sample-ratio 0.2
   --seed 42
 """
 

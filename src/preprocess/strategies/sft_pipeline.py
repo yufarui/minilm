@@ -10,6 +10,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Iterator
 
+from src.config.logging_config import setup_logging
 from src.preprocess.basic_clean import BasicCleanConfig, apply_basic_text_quality
 from src.preprocess.deduplicate import (
     ExactDedupConfig,
@@ -170,6 +171,7 @@ class SftPreprocessPipeline:
         self.cfg = cfg
 
     def run(self, input_path: str | Path, output_path: str | Path) -> SftPreprocessStats:
+        setup_logging()
         inp, out = Path(input_path), Path(output_path)
         stats = SftPreprocessStats()
         cf = self.cfg.conversations_field
