@@ -11,7 +11,7 @@
 #
 # 示例:
 #   cd /path/to/minilm
-#   STAGE=pretrain bash scripts/run_deepspeed.sh
+#   STAGE=pretrain NUM_GPUS=2 bash scripts/run_deepspeed.sh
 #   STAGE=sft NUM_GPUS=2 bash scripts/run_deepspeed.sh
 #   STAGE=dpo DEEPSPEED_CONFIG=config/pretrain/deepspeed_zero2.json bash scripts/run_deepspeed.sh --max_steps 500
 #

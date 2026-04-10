@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Optional
+from typing import Any, Optional
 
 
 @dataclass
@@ -98,7 +98,7 @@ class PretrainDataArguments(TrainDataArguments):
             "与 pack_bin_schedule 同时存在时，schedule 未覆盖的尾段或回退仍用此值"
         },
     )
-    pack_bin_schedule: Optional[list] = field(
+    pack_bin_schedule: Optional[list[dict[str, Any]]] = field(
         default=None,
         metadata={
             "help": "预训练按「打包后样本下标」分阶段提升窗口：JSON 数组。"
