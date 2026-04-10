@@ -50,7 +50,14 @@ def _has_tool_calls(row: dict[str, Any], conversations_field: str) -> bool:
     if not isinstance(conv, list):
         return False
     for msg in conv:
-        if not isinstance(msg, dict) or msg.get("role") != "assistant":
+        if not isinstance(msg, dict):
+            continue
+        role = msg.get("role")
+        if role in {"tool", "function"}:
+            return True
+        if role == "system" and msg.get("tools"):
+            return True
+        if role != "assistant":
             continue
         tc = msg.get("tool_calls")
         if isinstance(tc, list) and tc:

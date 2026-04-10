@@ -109,6 +109,7 @@ class SftPreprocessStats:
     skipped_punctuation: int = 0
     skipped_tokens: int = 0
     skipped_refuse_reply: int = 0
+    skipped_think_samples: int = 0
     skipped_tool_json: int = 0
     tool_calls_repaired: int = 0
     markers_normalized_rows: int = 0

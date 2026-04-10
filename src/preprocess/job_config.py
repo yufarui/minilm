@@ -216,6 +216,10 @@ def _sft_pipeline_config_from_dict(d: dict[str, Any]) -> SftPipelineConfig:
         cfg = replace(cfg, normalize_markers={str(k): str(v) for k, v in d["normalize_markers"].items()})
     if "filter_refuse_replies" in d:
         cfg = replace(cfg, filter_refuse_replies=bool(d["filter_refuse_replies"]))
+    if "drop_think_samples" in d:
+        cfg = replace(cfg, drop_think_samples=bool(d["drop_think_samples"]))
+    if isinstance(d.get("think_markers"), list):
+        cfg = replace(cfg, think_markers=[str(x) for x in d["think_markers"] if str(x)])
     if isinstance(d.get("refuse_extra_substrings"), list):
         cfg = replace(cfg, refuse_extra_substrings=[str(x) for x in d["refuse_extra_substrings"]])
     if "min_chars" in d:

@@ -1,8 +1,8 @@
 # SFT 对话 JSONL：每行含 conversations（OpenAI 风格 role/content，可选 tool_calls）
 kind: sft
-input: data/sft_raw.jsonl
-output: data/sft_clean.jsonl
-stats_path: data/sft_clean_stats.json
+input: data/sft/sft_t2t_mini.jsonl
+output: data/sft/sft_clean.jsonl
+stats_path: data/sft/sft_clean_stats.json
 write_plots: false
 
 split:
@@ -21,17 +21,17 @@ sft:
   # 将数据里混用的别名统一成模板使用的标记（无则写 {}）
   normalize_markers: {}
   filter_refuse_replies: true
+  drop_think_samples: true
+  think_markers: ["<think>"]
   refuse_extra_substrings: []
   min_chars: 20
   max_chars: 200000
   truncate: true
   max_non_printable_ratio: 0.05
   max_punctuation_ratio: 0.55
-  # null：默认仅 zh-cn + en；[]：不做语言过滤
-  allowed_langs: null
-  lang_backend: langdetect
-  # lang_backend: fasttext 时填写 .bin 路径
-  # fasttext_model_path: third_party/lid.176.bin
+  allowed_langs: ["zh-cn", "en"]
+  lang_backend: fasttext
+  fasttext_model_path: third_party/lid.176.bin
   exact_dedup: true
   exact:
     algorithm: sha1

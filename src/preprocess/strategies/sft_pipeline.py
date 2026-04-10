@@ -53,11 +53,25 @@ logger = logging.getLogger(__name__)
 
 def _iter_jsonl(path: Path) -> Iterator[dict[str, Any]]:
     with path.open(encoding="utf-8", errors="replace") as f:
-        for line in f:
+        for line_no, line in enumerate(f, start=1):
             line = line.strip()
             if not line:
                 continue
-            yield json.loads(line)
+            try:
+                obj = json.loads(line)
+            except json.JSONDecodeError as e:
+                logger.warning(
+                    "Skip invalid JSONL line: %s:%s (%s at char %s)",
+                    path,
+                    line_no,
+                    e.msg,
+                    e.pos,
+                )
+                continue
+            if not isinstance(obj, dict):
+                logger.warning("Skip non-object JSONL line: %s:%s", path, line_no)
+                continue
+            yield obj
 
 
 def _write_jsonl(path: Path, rows: list[dict[str, Any]]) -> None:
@@ -93,6 +107,10 @@ class SftPipelineConfig:
     normalize_markers: dict[str, str] = field(default_factory=dict)
     # 是否过滤拒答类 assistant 回复。
     filter_refuse_replies: bool = True
+    # 是否丢弃包含 think 标记的样本。
+    drop_think_samples: bool = False
+    # 触发 think 丢弃的子串标记（命中任一即丢弃）。
+    think_markers: list[str] = field(default_factory=lambda: ["<think>"])
     # 额外拒答关键词（在默认规则之外）。
     refuse_extra_substrings: list[str] = field(default_factory=list)
     # 基础清洗最小字符数。
@@ -215,6 +233,24 @@ class SftPreprocessPipeline:
                 continue
 
             messages = copy.deepcopy(conv)
+            if self.cfg.drop_think_samples:
+                marker_hit = False
+                markers = [m for m in self.cfg.think_markers if isinstance(m, str) and m]
+                if markers:
+                    for m in messages:
+                        if not isinstance(m, dict):
+                            continue
+                        content = m.get("content")
+                        if isinstance(content, str) and any(tag in content for tag in markers):
+                            marker_hit = True
+                            break
+                        tc = m.get("tool_calls")
+                        if isinstance(tc, str) and any(tag in tc for tag in markers):
+                            marker_hit = True
+                            break
+                    if marker_hit:
+                        stats.skipped_think_samples += 1
+                        continue
             if self.cfg.normalize_markers:
                 messages = _apply_markers_to_messages(messages, self.cfg.normalize_markers)
                 stats.markers_normalized_rows += 1

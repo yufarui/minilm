@@ -31,9 +31,9 @@ def content_fingerprint(text: str, algorithm: str = "sha1") -> str:
 def _shingles(text: str, n: int) -> list[bytes]:
     toks = re.findall(r"\S+", text.lower())
     if len(toks) < n:
-        return [b" ".join(toks).encode("utf-8", errors="ignore")] if toks else []
+        return [" ".join(toks).encode("utf-8", errors="ignore")] if toks else []
     return [
-        b" ".join(toks[i : i + n]).encode("utf-8", errors="ignore")
+        " ".join(toks[i : i + n]).encode("utf-8", errors="ignore")
         for i in range(len(toks) - n + 1)
     ]
 
