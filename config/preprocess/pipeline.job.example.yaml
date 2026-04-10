@@ -1,0 +1,60 @@
+kind: pretrain
+
+input: data/pretrain_train.jsonl
+output: data/pretrain_train_clean.jsonl
+stats_path: reports/preprocess_stats.json
+write_plots: true
+plots_dir: reports/preprocess_figures
+
+split:
+  pretrain:
+    enabled: true
+    val_size: 5000
+    val_output_path: data/pretrain/pretrain_val.jsonl
+    seed: 42
+
+
+pipeline:
+  text_field: text
+
+  # 基础清洗：长度截断、语言白名单、标点占比等
+  basic:
+    min_chars: 20 
+    max_chars: 200000
+    truncate: true 
+    allowed_langs: ["zh-cn", "en"]
+    max_punctuation_ratio: 0.55 # 标点占比超过则丢弃
+
+  intra_doc_dedupe_paragraphs: true # 文档内段落级去重
+  exact_dedup: true # 全文精确去重（哈希）
+
+  # MinHash 近似重复：Jaccard 阈值；越高只有更相似的才算重复，去重更温和
+  near_dedup:
+    enabled: true
+    threshold: 0.88
+    num_perm: 128 # MinHash 排列数，越大越准但更慢、更占内存
+    shingle_size: 5 # 词级 n-gram（连续词窗长度）
+
+  ppl_enable: true
+  ppl_apply_percentile_filter: false
+  # 仅在 ppl_enable=true 且计算出 _ppl 时生效：按 (ppl, length) 从低到高重排输出
+  ppl_sort_ascending: true 
+
+  # 困惑度模型（仅当开启 ppl 相关选项时生效）
+  ppl:
+    model_name: gpt2
+    max_length: 1024
+    device: null
+
+  # 用全语料 PPL 的分位数定上下界，保留 [下界, 上界] 内样本；过高丢弃；过低一般丢弃
+  ppl_low_percentile: 1.0
+  ppl_high_percentile: 95.0
+  ppl_keep_low_if_structured: true # 低于下界时，若像代码/表格则仍保留
+
+  bert_mlm_log: false # 是否记录 BERT MLM 负对数似然（较慢，多用于分析）
+
+  # 主题审计（BERTopic 等，需可选依赖 preprocess-full）
+  topic:
+    enabled: false
+    max_docs: 10000 # 参与主题建模的最大文档数
+    output_dir: reports/pretrain_topic.json # 主题报告输出目录；null 用默认

@@ -1,0 +1,19 @@
+[
+  {
+    "conversations": [
+      {"role": "system", "content": "你是一个有帮助的 AI 助手。"},
+      {"role": "user", "content": "请用三句话介绍杭州。"}
+    ]
+  },
+  {
+    "conversations": [
+      {"role": "user", "content": "写一个 Python 函数，返回列表中的最大值。"}
+    ]
+  },
+  {
+    "conversations": [
+      {"role": "system", "content": "请先给结论，再简要解释。"},
+      {"role": "user", "content": "为什么要做单元测试？"}
+    ]
+  }
+]

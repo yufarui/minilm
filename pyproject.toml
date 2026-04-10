@@ -1,0 +1,44 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "minilm"
+version = "0.1.0"
+description = "Add your description here"
+requires-python = ">=3.11"
+dependencies = [
+    "PyYAML>=6.0.2",
+    "accelerate>=1.1.0",
+    "datasets>=4.8.4",
+    "matplotlib>=3.10.8",
+    "pydantic>=2.12.5",
+    "swanlab>=0.7.13",
+    "torch>=2.11.0",
+    "trl",
+    "transformers>=5.3.0",
+    "wandb>=0.25.1",
+    "pytest>=8.0",
+]
+
+[project.optional-dependencies]
+deepspeed = [
+    "deepspeed>=0.15.0",
+]
+
+# uv pip install -e ".[preprocess-full]"
+preprocess-full = [
+    "datasketch>=1.6.0",
+    "fasttext>=0.9.3",
+    "bertopic>=0.16.0",
+    "sentence-transformers>=3.0.0",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
+addopts = "-ra -q"
+

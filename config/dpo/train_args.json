@@ -1,0 +1,32 @@
+{
+  "output_dir": "checkpoints/dpo",
+  "run_name": "minilm-dpo",
+  "seed": 42,
+  "data_seed": 42,
+  "ignore_data_skip": false,
+  "accelerator_config": {
+    "use_seedable_sampler": true
+  },
+  "do_train": true,
+  "do_eval": true,
+  "bf16": true,
+  "per_device_train_batch_size": 2,
+  "per_device_eval_batch_size": 2,
+  "gradient_accumulation_steps": 8,
+  "learning_rate": 5e-7,
+  "weight_decay": 0.0,
+  "max_grad_norm": 1.0,
+  "lr_scheduler_type": "cosine",
+  "logging_steps": 10,
+  "save_strategy": "steps",
+  "eval_strategy": "steps",
+  "save_steps": 500,
+  "eval_steps": 500,
+  "max_steps": 5000,
+  "warmup_steps": 200,
+  "save_total_limit": 3,
+  "gradient_checkpointing": false,
+  "prediction_loss_only": false,
+  "dataloader_num_workers": 4,
+  "report_to": "swanlab"
+}

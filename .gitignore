@@ -1,0 +1,67 @@
+# OS / editor
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+
+# Cursor / local agent artifacts
+.cursor/
+.cursor-cache/
+
+# Python cache / build
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.so
+*.egg-info/
+.eggs/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+.coverage.*
+htmlcov/
+build/
+dist/
+site/
+
+# Virtual environments
+.venv/
+venv/
+env/
+.env
+ENV/
+
+# Notebook / logs / temp
+.ipynb_checkpoints/
+*.log
+*.tmp
+*.temp
+tmp/
+temp/
+
+# Test generated artifacts
+tests/tmp/
+
+# Local model / dataset outputs (usually large)
+outputs/
+runs/
+checkpoints/
+logs/
+
+# Project data files (keep only structure or small samples manually if needed)
+data/**/*.jsonl
+data/**/*.json
+data/**/*.parquet
+data/**/*.arrow
+data/**/*.csv
+data/**/*.tsv
+data/**/*.txt
+
+# Common model binaries
+*.bin
+*.pt
+*.pth
+*.safetensors
+*.onnx

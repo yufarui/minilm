@@ -1,0 +1,15 @@
+{
+  "train_data_path": "data/pretrain/pretrain_train.jsonl",
+  "eval_data_path": "data/pretrain/pretrain_val.jsonl",
+  "tokenizer_name_or_path": "tokenizer/minilm",
+  "max_seq_length": 8192,
+  "pack_bin_size": 8192,
+  "pack_bin_schedule": [
+    {"until_index": 10000, "pack_bin_size": 2048},
+    {"until_index": 40000, "pack_bin_size": 4096},
+    {"pack_bin_size": 8192}
+  ],
+  "pack_sort_order": "file_order",
+  "swanlab_diag_log_attn_every": 500,
+  "swanlab_diag_log_hidden_every": 500
+}

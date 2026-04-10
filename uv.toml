@@ -1,0 +1,19 @@
+## uv persistent configuration for faster dependency downloads.
+## Put this file in the project root (next to pyproject.toml).
+
+# Cache directory for uv artifacts (wheels, metadata, etc.)
+cache-dir = "./.uv_cache"
+link-mode = "copy"
+
+# More concurrent downloads can significantly speed up `uv sync` on fast networks.
+# If you see timeouts/connection resets, reduce this number (e.g. 16 -> 8).
+concurrent-downloads = 32
+concurrent-installs = 16
+concurrent-builds = 4
+
+## Package indexes
+## Keep PyPI as fallback (uv's built-in default). Put a faster mirror first.
+[[index]]
+name = "tuna"
+url = "https://pypi.tuna.tsinghua.edu.cn/simple"
+

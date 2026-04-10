@@ -1,0 +1,16 @@
+"""sentence-transformers 编码器（主题审计等），按模型名/Hub id 单例。"""
+
+from __future__ import annotations
+
+from src.ref_model.registry import get_or_create
+
+
+def get_sentence_transformer(model_name: str):
+    key = ("sentence_transformer", model_name)
+
+    def load():
+        from sentence_transformers import SentenceTransformer
+
+        return SentenceTransformer(model_name)
+
+    return get_or_create(key, load)

@@ -1,0 +1,55 @@
+[
+  {
+    "conversations": [
+      {
+        "role": "system",
+        "content": "你是工具调用助手。使用函数时必须返回合法 JSON。",
+        "tools": [
+          {
+            "type": "function",
+            "function": {
+              "name": "get_weather",
+              "description": "查询天气",
+              "parameters": {
+                "type": "object",
+                "properties": {
+                  "city": {"type": "string"},
+                  "date": {"type": "string"}
+                },
+                "required": ["city"]
+              }
+            }
+          }
+        ]
+      },
+      {"role": "user", "content": "帮我查北京明天的天气"}
+    ]
+  },
+  {
+    "conversations": [
+      {
+        "role": "system",
+        "content": "你是工具调用助手。输出函数调用 JSON，不要自然语言。",
+        "tools": [
+          {
+            "type": "function",
+            "function": {
+              "name": "search_flight",
+              "description": "搜索机票",
+              "parameters": {
+                "type": "object",
+                "properties": {
+                  "from_city": {"type": "string"},
+                  "to_city": {"type": "string"},
+                  "date": {"type": "string"}
+                },
+                "required": ["from_city", "to_city", "date"]
+              }
+            }
+          }
+        ]
+      },
+      {"role": "user", "content": "后天从上海到深圳的机票"}
+    ]
+  }
+]

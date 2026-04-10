@@ -1,0 +1,5 @@
+{
+  "wiki": "data/eval/wiki_val.jsonl",
+  "code": "data/eval/code_val.jsonl",
+  "news": "data/eval/news_val.jsonl"
+}

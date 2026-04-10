@@ -1,0 +1,23 @@
+{
+  "model_config_file": "config/config.json",
+  "pretrained_model_path": "checkpoints/pretrain",
+
+  "train_data_path": "data/sft/train.jsonl",
+  "eval_data_path": "data/sft/val_multi_turn.jsonl",
+
+  "tokenizer_name_or_path": "tokenizer/minilm",
+  "max_seq_length": 8192,
+  "pack_bin_size": 8192,
+
+  "diag_every_n_steps": 0,
+  "diag_num_eval_batches": 1,
+  "diag_gen_every_n_steps": 500,
+  "diag_gen_max_new_tokens": 64,
+  "diag_gen_prompts_json": "config/sft/diag_gen_prompts.example.json",
+  "diag_gen_do_sample": false,
+  "diag_gen_temperature": 0.8,
+
+  "diag_sft_tool_json_every_n_steps": 500,
+  "diag_sft_tool_json_max_new_tokens": 128,
+  "diag_sft_tool_json_prompts_json": "config/sft/diag_tool_json_prompts.example.json"
+}
