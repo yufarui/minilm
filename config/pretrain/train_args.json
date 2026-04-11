@@ -32,5 +32,6 @@
   "dataloader_pin_memory": true,
   "dataloader_persistent_workers": true,
   "dataloader_prefetch_factor": 2,
-  "report_to": "swanlab"
+  "report_to": "swanlab",
+  "resume_from_checkpoint": "checkpoints/pretrain/checkpoint-2000"
 }

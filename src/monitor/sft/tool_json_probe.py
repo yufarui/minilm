@@ -109,29 +109,34 @@ class SftToolJsonGenerationProbeCallback(TrainerCallback):
         m = _unwrap_model(m)
         device = next(m.parameters()).device
         tok = self.tokenizer
+        was_training = m.training
         m.eval()
         ok, total = 0, 0
-        with torch.no_grad():
-            for prompt in self.prompts[: self.max_prompts_per_probe]:
-                prompt_text = _render_generation_prompt(tok, prompt)
-                enc = tok(prompt_text, return_tensors="pt", add_special_tokens=True)
-                enc = {k: v.to(device) for k, v in enc.items()}
-                out_ids = m.generate(
-                    **enc,
-                    max_new_tokens=self.max_new_tokens,
-                    pad_token_id=tok.pad_token_id or tok.eos_token_id,
-                    eos_token_id=tok.eos_token_id,
-                    do_sample=False,
-                )
-                text = tok.decode(out_ids[0], skip_special_tokens=True)
-                chunk = _first_balanced_brace_chunk(text)
-                total += 1
-                if chunk:
-                    try:
-                        json.loads(chunk)
-                        ok += 1
-                    except json.JSONDecodeError:
-                        pass
+        try:
+            with torch.no_grad():
+                for prompt in self.prompts[: self.max_prompts_per_probe]:
+                    prompt_text = _render_generation_prompt(tok, prompt)
+                    enc = tok(prompt_text, return_tensors="pt", add_special_tokens=True)
+                    enc = {k: v.to(device) for k, v in enc.items()}
+                    out_ids = m.generate(
+                        **enc,
+                        max_new_tokens=self.max_new_tokens,
+                        pad_token_id=tok.pad_token_id or tok.eos_token_id,
+                        eos_token_id=tok.eos_token_id,
+                        do_sample=False,
+                    )
+                    text = tok.decode(out_ids[0], skip_special_tokens=True)
+                    chunk = _first_balanced_brace_chunk(text)
+                    total += 1
+                    if chunk:
+                        try:
+                            json.loads(chunk)
+                            ok += 1
+                        except json.JSONDecodeError:
+                            pass
+        finally:
+            if was_training:
+                m.train()
         if total:
             rate = ok / total
             logs["sft_diag/tool_json_parse_rate"] = rate

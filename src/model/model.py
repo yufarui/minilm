@@ -153,7 +153,7 @@ class MiniLmForCausalLM(PreTrainedModel, GenerationMixin):
         logits = self.lm_head(hidden_states[:, slice_indices, :])
 
         loss = None
-        if self.training:
+        if labels is not None:
             loss = self.loss_function(logits=logits, labels=labels, vocab_size=self.vocab_size)
             loss = loss + outputs.aux_loss
 

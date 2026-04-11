@@ -178,22 +178,27 @@ class TrainingDiagnosticsCallback(TrainerCallback):
         dl = DataLoader(ds, batch_size=batch_size, shuffle=False, collate_fn=collator)
         device = next(model.parameters()).device
         m = _unwrap_model(model)
+        was_training = m.training
         m.eval()
         top1_list: list[float] = []
         ent_list: list[float] = []
-        with torch.no_grad():
-            for i, features in enumerate(dl):
-                if i >= self.num_eval_batches:
-                    break
-                batch = {k: v.to(device) if isinstance(v, torch.Tensor) else v for k, v in features.items()}
-                out = m(**batch)
-                logits = out.logits
-                labels = batch["labels"]
-                t1, h = _next_token_top1_and_entropy(logits, labels, self.ignore_index)
-                if not (t1 != t1):  # not NaN
-                    top1_list.append(t1)
-                if not (h != h):
-                    ent_list.append(h)
+        try:
+            with torch.no_grad():
+                for i, features in enumerate(dl):
+                    if i >= self.num_eval_batches:
+                        break
+                    batch = {k: v.to(device) if isinstance(v, torch.Tensor) else v for k, v in features.items()}
+                    out = m(**batch)
+                    logits = out.logits
+                    labels = batch["labels"]
+                    t1, h = _next_token_top1_and_entropy(logits, labels, self.ignore_index)
+                    if not (t1 != t1):  # not NaN
+                        top1_list.append(t1)
+                    if not (h != h):
+                        ent_list.append(h)
+        finally:
+            if was_training:
+                m.train()
         if top1_list:
             logs["diag/eval_top1"] = sum(top1_list) / len(top1_list)
         if ent_list:
@@ -203,30 +208,35 @@ class TrainingDiagnosticsCallback(TrainerCallback):
     def _run_generation(self, model: torch.nn.Module, step: int) -> None:
         m = _unwrap_model(model)
         device = next(model.parameters()).device
+        was_training = m.training
         m.eval()
         tok = self.tokenizer
         max_new = self.gen_max_new_tokens
         payload: Dict[str, Any] = {}
-        with torch.no_grad():
-            for pi, prompt in enumerate(self.gen_prompts[:8]):
-                prompt_text = _render_generation_prompt(tok, prompt)
-                enc = tok(prompt_text, return_tensors="pt", add_special_tokens=True)
-                enc = {k: v.to(device) for k, v in enc.items()}
-                gen_kw: Dict[str, Any] = dict(
-                    max_new_tokens=max_new,
-                    pad_token_id=tok.pad_token_id or tok.eos_token_id,
-                    eos_token_id=tok.eos_token_id,
-                )
-                if self.gen_do_sample:
-                    gen_kw["do_sample"] = True
-                    gen_kw["temperature"] = self.gen_temperature
-                else:
-                    gen_kw["do_sample"] = False
-                out_ids = m.generate(**enc, **gen_kw)
-                text = tok.decode(out_ids[0], skip_special_tokens=True)
-                key = f"diag/gen/prompt_{pi}"
-                payload[key] = text
-                logger.info("[%s] step=%s %s", key, step, text[:500].replace("\n", "\\n"))
+        try:
+            with torch.no_grad():
+                for pi, prompt in enumerate(self.gen_prompts[:8]):
+                    prompt_text = _render_generation_prompt(tok, prompt)
+                    enc = tok(prompt_text, return_tensors="pt", add_special_tokens=True)
+                    enc = {k: v.to(device) for k, v in enc.items()}
+                    gen_kw: Dict[str, Any] = dict(
+                        max_new_tokens=max_new,
+                        pad_token_id=tok.pad_token_id or tok.eos_token_id,
+                        eos_token_id=tok.eos_token_id,
+                    )
+                    if self.gen_do_sample:
+                        gen_kw["do_sample"] = True
+                        gen_kw["temperature"] = self.gen_temperature
+                    else:
+                        gen_kw["do_sample"] = False
+                    out_ids = m.generate(**enc, **gen_kw)
+                    text = tok.decode(out_ids[0], skip_special_tokens=True)
+                    key = f"diag/gen/prompt_{pi}"
+                    payload[key] = text
+                    logger.info("[%s] step=%s %s", key, step, text[:500].replace("\n", "\\n"))
+        finally:
+            if was_training:
+                m.train()
         self._swanlab_log_text(payload, step)
 
     @staticmethod
