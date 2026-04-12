@@ -1,3 +1,4 @@
+import json
 import pytest
 from itertools import islice
 
@@ -60,19 +61,24 @@ def test_sft_dataset_load_from_preprocess_tmp() -> None:
     tok = load_local_tokenizer()
     ds = SFTDataset(SFT_JSONL, tok, pack_bin_size=128)
 
-    assert len(ds) > 0
     # 预处理样本中应包含至少一条 tool 消息（由 test_preprocess_pipelines 构造）。
-    has_tool_row = any(
-        any(m.get("role") == "tool" for m in row.get("conversations", []))
-        for row in ds.samples
-    )
+    has_tool_row = False
+    with open(SFT_JSONL, encoding="utf-8") as fp:
+        for line in fp:
+            line = line.strip()
+            if not line:
+                continue
+            row = json.loads(line)
+            if any(m.get("role") == "tool" for m in row.get("conversations", [])):
+                has_tool_row = True
+                break
     assert has_tool_row
 
     # 打包后应能在解码文本中看到 tool 相关内容，证明 tool 路径被实际编码。
-    decoded_texts = [tok.decode(item["input_ids"].tolist()) for item in ds]
+    decoded_texts = [tok.decode(item["input_ids"].tolist()) for item in islice(iter(ds), 32)]
     assert any(("tool" in txt) and ("result" in txt) for txt in decoded_texts)
 
-    sample = ds[0]
+    sample = next(iter(ds))
 
     print("sample\n", sample)
     print("decode\n", tok.decode(sample["input_ids"]))
@@ -100,8 +106,7 @@ def test_sft_dataset_loads_stringified_tools_and_tool_calls() -> None:
     tok = load_local_tokenizer()
     # 需足够大：system tools 定义较长，过小会在 tool 回复前被截断，解码中看不到 "69"。
     ds = SFTDataset(SFT_TOOLS_STRING_JSONL, tok, pack_bin_size=4096)
-    assert len(ds) > 0
-    encoded = ds[0]
+    encoded = next(iter(ds))
     print("encoded\n", encoded)
     text = tok.decode(encoded["input_ids"].tolist())
     print("text\n", text)

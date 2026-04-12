@@ -37,6 +37,7 @@ def run_sft(training_args: TrainingArguments, data_args: SftDataArguments) -> No
         train_data_path,
         tokenizer,
         pack_bin_size=data_args.max_seq_length,
+        pack_sort_order=data_args.pack_sort_order,
     )
     eval_dataset = None
     if training_args.do_eval:
@@ -47,6 +48,7 @@ def run_sft(training_args: TrainingArguments, data_args: SftDataArguments) -> No
                 eval_data_path,
                 tokenizer,
                 pack_bin_size=data_args.max_seq_length,
+                pack_sort_order=data_args.pack_sort_order,
             )
         if data_args.eval_domains_json:
             domains_manifest_path = resolve_under_project(data_args.eval_domains_json)
@@ -62,6 +64,7 @@ def run_sft(training_args: TrainingArguments, data_args: SftDataArguments) -> No
                     eval_data_file,
                     tokenizer,
                     pack_bin_size=data_args.max_seq_length,
+                    pack_sort_order=data_args.pack_sort_order,
                 )
         if not eval_map:
             logger.warning("do_eval=True 但未设置 eval_data_path 或 eval_domains_json，eval_dataset=None")

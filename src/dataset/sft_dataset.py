@@ -5,18 +5,21 @@ import json
 import logging
 import random
 from pathlib import Path
-from typing import Any, Dict, List
+from typing import Any, Dict, Iterator, List
 
 import torch
-from datasets import load_dataset
-from torch.utils.data import Dataset
+from torch.utils.data import IterableDataset
+
+from src.dataset.pre_train_dataset import PreTrainDataset, _iter_jsonl_objects
 
 logger = logging.getLogger(__name__)
 
 
-class SFTDataset(Dataset):
-    """对话 SFT：JSONL 每行含 ``conversations``；仅用 ``assistant`` 段计算 loss。
-    载入后按序列长度排序，first-fit packing 拼包（包内样本间用 ``<|endoftext|>`` 拼接，对应 label 为 -100）。
+class SFTDataset(IterableDataset):
+    """对话 SFT：JSONL 流式逐行读取，边编码边打包，不一次性载入全量再 packing。
+
+    - ``pack_sort_order=file_order``：与预训练类似，按行顺序在线 first-fit，内存由 ``max_open_bins`` 约束。
+    - ``shortest_first`` / ``longest_first``：按块排序（块大小 ``sort_buffer_size``），避免整表排序占满内存。
     """
 
     SYSTEM_PROMPTS = [
@@ -33,85 +36,158 @@ class SFTDataset(Dataset):
     ]
 
     def __init__(
-            self,
-            jsonl_path: str | Path,
-            tokenizer,
-            pack_bin_size: int,
-            pack_sort_order: str = "shortest_first",
-
+        self,
+        jsonl_path: str | Path,
+        tokenizer,
+        pack_bin_size: int,
+        pack_sort_order: str = "file_order",
+        max_open_bins: int = 512,
+        sort_buffer_size: int = 4096,
     ) -> None:
         super().__init__()
         self.tokenizer = tokenizer
         self.pack_bin_size = int(pack_bin_size)
         self.pack_sort_order = pack_sort_order
+        self.max_open_bins = max(1, int(max_open_bins))
+        self.sort_buffer_size = max(1, int(sort_buffer_size))
 
         sep_id = tokenizer.convert_tokens_to_ids("<|endoftext|>")
-
+        self._sep_id = int(sep_id)
         self.jsonl_path = str(jsonl_path)
-        self.samples = load_dataset("json", data_files=self.jsonl_path, split="train")
 
         self.bos_enc_id = tokenizer.encode("<|im_start|>assistant\n", add_special_tokens=False)
         self.eos_enc_id = tokenizer.encode(f"{tokenizer.eos_token}\n", add_special_tokens=False)
 
         self.add_system_ratio = 0.2
 
-        doc_pairs: list[tuple[list[int], list[int]]] = []
-        skipped_empty = 0
-        truncated_docs = 0
+        logger.info(
+            "SFTDataset(streaming): path=%s pack_bin_size=%s sort=%s max_open_bins=%s sort_buffer_size=%s",
+            self.jsonl_path,
+            self.pack_bin_size,
+            self.pack_sort_order,
+            self.max_open_bins,
+            self.sort_buffer_size,
+        )
 
-        for i in range(len(self.samples)):
-            sample = self.samples[i]
-            conversations = sample.get("conversations", [])
-            if not conversations:
-                skipped_empty += 1
+    def __iter__(self) -> Iterator[dict[str, torch.Tensor]]:
+        shard_id, num_shards = PreTrainDataset._shard_info()
+        if self.pack_sort_order in ("shortest_first", "longest_first"):
+            yield from self._iter_sort_buffer_pack(shard_id, num_shards)
+        else:
+            if self.pack_sort_order != "file_order":
+                logger.warning(
+                    "未知 pack_sort_order=%r，按 file_order 流式处理",
+                    self.pack_sort_order,
+                )
+            yield from self._iter_streaming_first_fit(shard_id, num_shards)
+
+    def _iter_jsonl_encoded(
+        self, shard_id: int, num_shards: int
+    ) -> Iterator[tuple[list[int], list[int]]]:
+        for i, row in enumerate(_iter_jsonl_objects(self.jsonl_path)):
+            if (i % num_shards) != shard_id:
                 continue
-
+            conversations = row.get("conversations", [])
+            if not conversations:
+                continue
             enc = self._encode_conversation(conversations)
             if enc is None:
-                skipped_empty += 1
                 continue
             input_ids, labels = enc
             if not input_ids:
-                skipped_empty += 1
                 continue
             if len(input_ids) > self.pack_bin_size:
                 input_ids = input_ids[: self.pack_bin_size]
                 labels = labels[: self.pack_bin_size]
-                truncated_docs += 1
-            doc_pairs.append((input_ids, labels))
+            yield input_ids, labels
 
-        if pack_sort_order == "longest_first":
-            doc_pairs.sort(key=lambda p: len(p[0]), reverse=True)
-        elif pack_sort_order == "shortest_first":
-            doc_pairs.sort(key=lambda p: len(p[0]), reverse=False)
+    def _iter_streaming_first_fit(
+        self, shard_id: int, num_shards: int
+    ) -> Iterator[dict[str, torch.Tensor]]:
+        bins_in: list[list[int]] = []
+        bins_lab: list[list[int]] = []
+        emitted = 0
+        seen_docs = 0
 
-        packed = self._pack_sft_pairs_into_bins(doc_pairs, self.pack_bin_size, int(sep_id))
+        def try_place(doc_in: list[int], doc_lab: list[int]) -> bool:
+            for b_in, b_lab in zip(bins_in, bins_lab):
+                gap = 1 if b_in else 0
+                if len(b_in) + gap + len(doc_in) <= self.pack_bin_size:
+                    if gap:
+                        b_in.append(self._sep_id)
+                        b_lab.append(-100)
+                    b_in.extend(doc_in)
+                    b_lab.extend(doc_lab)
+                    return True
+            return False
 
-        self._packed: list[dict[str, torch.Tensor]] = []
-        for input_ids, labels in packed:
-            self._packed.append(
-                {
+        def emit_bin(idx: int) -> dict[str, torch.Tensor]:
+            nonlocal emitted
+            b_in = bins_in.pop(idx)
+            b_lab = bins_lab.pop(idx)
+            emitted += 1
+            return {
+                "input_ids": torch.tensor(b_in, dtype=torch.long),
+                "labels": torch.tensor(b_lab, dtype=torch.long),
+            }
+
+        for input_ids, labels in self._iter_jsonl_encoded(shard_id, num_shards):
+            seen_docs += 1
+            while True:
+                if try_place(input_ids, labels):
+                    break
+                if len(bins_in) >= self.max_open_bins:
+                    yield emit_bin(0)
+                    continue
+                bins_in.append(list(input_ids))
+                bins_lab.append(list(labels))
+                break
+
+        while bins_in:
+            yield emit_bin(0)
+
+        logger.info(
+            "SFTDataset(streaming first-fit): docs=%s emitted=%s shard=%s/%s",
+            seen_docs,
+            emitted,
+            shard_id,
+            num_shards,
+        )
+
+    def _iter_sort_buffer_pack(
+        self, shard_id: int, num_shards: int
+    ) -> Iterator[dict[str, torch.Tensor]]:
+        buf: list[tuple[list[int], list[int]]] = []
+        emitted = 0
+        rev = self.pack_sort_order == "longest_first"
+
+        def flush() -> Iterator[dict[str, torch.Tensor]]:
+            nonlocal emitted, buf
+            if not buf:
+                return
+            buf.sort(key=lambda p: len(p[0]), reverse=rev)
+            packed = SFTDataset._pack_sft_pairs_into_bins(buf, self.pack_bin_size, self._sep_id)
+            buf.clear()
+            for input_ids, labels in packed:
+                emitted += 1
+                yield {
                     "input_ids": torch.tensor(input_ids, dtype=torch.long),
                     "labels": torch.tensor(labels, dtype=torch.long),
                 }
-            )
+
+        for pair in self._iter_jsonl_encoded(shard_id, num_shards):
+            buf.append(pair)
+            if len(buf) >= self.sort_buffer_size:
+                yield from flush()
+        yield from flush()
 
         logger.info(
-            "SFTDataset packing: raw_convs=%s bins=%s pack_bin_size=%s sort=%s "
-            "skipped_empty=%s truncated_to_bin=%s",
-            len(doc_pairs),
-            len(self._packed),
-            self.pack_bin_size,
-            pack_sort_order,
-            skipped_empty,
-            truncated_docs,
+            "SFTDataset(sort-buffer pack): emitted=%s order=%s shard=%s/%s",
+            emitted,
+            self.pack_sort_order,
+            shard_id,
+            num_shards,
         )
-
-    def __len__(self) -> int:
-        return len(self._packed)
-
-    def __getitem__(self, index: int) -> Dict[str, Any]:
-        return self._packed[index]
 
     @staticmethod
     def _tool_calls_fill(conv: List[Dict[str, Any]]):
@@ -170,16 +246,15 @@ class SFTDataset(Dataset):
 
         self._tool_calls_fill(conv)
 
-        prompt = self.tokenizer.apply_chat_template(
+        raw = self.tokenizer.apply_chat_template(
             conv,
+            tokenize=True,
             add_generation_prompt=False,
             tools=tools,
-            # 关闭 open_think
             open_think=False,
         )
-        if hasattr(prompt, "tolist"):
-            prompt = prompt.tolist()
-        prompt = list(prompt)
+
+        prompt = raw.detach().cpu().flatten().tolist()
 
         labels = self.generate_labels(prompt)
         return prompt, labels
@@ -190,12 +265,12 @@ class SFTDataset(Dataset):
         bos, eos = self.bos_enc_id, self.eos_enc_id
         lbos, leos = len(bos), len(eos)
         while i < len(prompt):
-            if prompt[i: i + lbos] == bos:
+            if prompt[i : i + lbos] == bos:
                 start = i + lbos
                 j = start
                 while j < len(prompt):
                     labels[j] = prompt[j]
-                    if prompt[j: j + leos] == eos:
+                    if prompt[j : j + leos] == eos:
                         break
                     j += 1
                 i = j + leos if j < len(prompt) else len(prompt)
@@ -205,9 +280,9 @@ class SFTDataset(Dataset):
 
     @staticmethod
     def _pack_sft_pairs_into_bins(
-            doc_pairs: list[tuple[list[int], list[int]]],
-            pack_bin_size: int,
-            sep_token_id: int,
+        doc_pairs: list[tuple[list[int], list[int]]],
+        pack_bin_size: int,
+        sep_token_id: int,
     ) -> list[tuple[list[int], list[int]]]:
         """First-fit：依次尝试放入已有 bin；包内用 sep_token 拼接 input，labels 在分隔处为 -100。"""
         bins_in: list[list[int]] = []
