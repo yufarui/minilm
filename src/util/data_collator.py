@@ -134,9 +134,13 @@ class TrainDataCollator:
                     torch.tril(torch.ones(seg_len, seg_len, dtype=torch.bool, device=input_ids.device), diagonal=0)
                 )
             elif block_type == "prefix":
-                # 下一个block有且必然是causal,这是我们约定的
-                next_seg_end = label_blocks[index + 1][1]
-                prefix_attn_mask[seg_start: next_seg_end, seg_start: seg_end] = True
+                # 约定 prefix 后为 causal；若序列末尾仅有 prefix（无后续块），不能读 label_blocks[index+1]。
+                if index + 1 < len(label_blocks):
+                    next_seg_end = label_blocks[index + 1][1]
+                else:
+                    next_seg_end = seq_len
+                if next_seg_end > seg_start and seg_end > seg_start:
+                    prefix_attn_mask[seg_start:next_seg_end, seg_start:seg_end] = True
         return prefix_attn_mask
 
     def label_block(self, input_ids, labels):
