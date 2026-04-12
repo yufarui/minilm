@@ -258,11 +258,37 @@ class SFTDataset(IterableDataset):
             tools=tools,
             open_think=False,
         )
-
-        prompt = raw.detach().cpu().flatten().tolist()
+        prompt = self._coerce_chat_template_output_to_ids(raw)
 
         labels = self.generate_labels(prompt)
         return prompt, labels
+
+    def _coerce_chat_template_output_to_ids(self, raw: Any) -> list[int]:
+        """``apply_chat_template(tokenize=True)`` 在不同版本下可能返回 list、Tensor、或 BatchEncoding。"""
+        if isinstance(raw, str):
+            return self.tokenizer.encode(raw, add_special_tokens=False)
+        if isinstance(raw, torch.Tensor):
+            return raw.detach().cpu().flatten().tolist()
+        if isinstance(raw, dict):
+            inner = raw.get("input_ids")
+            if inner is not None:
+                return self._coerce_chat_template_output_to_ids(inner)
+        # BatchEncoding：支持 [] 与 .input_ids
+        if hasattr(raw, "input_ids"):
+            inner = raw["input_ids"]
+            return self._coerce_chat_template_output_to_ids(inner)
+        if isinstance(raw, (list, tuple)):
+            return [int(x) for x in raw]
+        try:
+            import numpy as np
+
+            if isinstance(raw, np.ndarray):
+                return raw.astype(np.int64).flatten().tolist()
+        except ImportError:
+            pass
+        raise TypeError(
+            f"无法将 apply_chat_template 输出转为 token id 列表，类型={type(raw).__name__}"
+        )
 
     def generate_labels(self, prompt: list[int]) -> list[int]:
         labels = [-100] * len(prompt)
