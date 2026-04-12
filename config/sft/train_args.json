@@ -1,4 +1,4 @@
-﻿{
+{
   "output_dir": "checkpoints/sft",
   "run_name": "minilm-sft-full",
   "seed": 42,
