@@ -14,17 +14,12 @@ from src.dataset.pre_train_dataset import PreTrainDataset, _iter_jsonl_objects
 
 logger = logging.getLogger(__name__)
 
-# 流式 first-fit 时最多保留的未完成 bin；超出则 FIFO 产出，避免内存无限增长。
-DEFAULT_MAX_OPEN_BINS = 512
-
 
 class SFTDataset(IterableDataset):
-    """对话 SFT：JSONL 流式逐行读取，多段对话 **first-fit packing** 拼成一条样本。
+    """对话 SFT：JSONL **一行一条样本**，流式读取，**不做 packing、不做截断**。
 
-    - 单条对话 **不拆到两个 pack**；过长则 **截断至 pack_bin_size** 以单独占满一包（与显存上限一致）。
-    - 包与包之间插入 ``<|endoftext|>``，对应 ``labels=-100``，供 ``TrainDataCollator`` 在分隔处重置
-      ``position_ids``、构造 packing 注意力掩码（与预训练 packing 语义一致）。
-    - 无 bin_scheduler；仅按 JSONL 顺序流式 first-fit，内存由 ``max_open_bins`` 约束。
+    - ``pack_bin_size`` 仅表示 ``max_seq_length``：编码后 **长度超过则跳过该条**（不截断、不拆对话）。
+    - 单条样本内通常 **不含** 预训练式 ``<|endoftext|>`` 合包分隔；``TrainDataCollator`` 仍按单段对话的 prefix/causal 规则构造掩码。
     """
 
     SYSTEM_PROMPTS = [
@@ -45,15 +40,11 @@ class SFTDataset(IterableDataset):
         jsonl_path: str | Path,
         tokenizer,
         pack_bin_size: int,
-        max_open_bins: int = DEFAULT_MAX_OPEN_BINS,
     ) -> None:
         super().__init__()
         self.tokenizer = tokenizer
-        self.pack_bin_size = int(pack_bin_size)
-        self.max_open_bins = max(1, int(max_open_bins))
+        self.max_seq_len = int(pack_bin_size)
         self.jsonl_path = str(jsonl_path)
-
-        self._sep_id = int(tokenizer.convert_tokens_to_ids("<|endoftext|>"))
 
         self.bos_enc_id = tokenizer.encode("<|im_start|>assistant\n", add_special_tokens=False)
         self.eos_enc_id = tokenizer.encode(f"{tokenizer.eos_token}\n", add_special_tokens=False)
@@ -61,87 +52,56 @@ class SFTDataset(IterableDataset):
         self.add_system_ratio = 0.2
 
         logger.info(
-            "SFTDataset(packing): path=%s pack_bin_size=%s max_open_bins=%s",
+            "SFTDataset(one-row-one-sample, no pack/truncate): path=%s max_seq_len=%s",
             self.jsonl_path,
-            self.pack_bin_size,
-            self.max_open_bins,
+            self.max_seq_len,
         )
 
     def __iter__(self) -> Iterator[dict[str, torch.Tensor]]:
         shard_id, num_shards = PreTrainDataset._shard_info()
-        yield from self._iter_streaming_first_fit(shard_id, num_shards)
+        seen = 0
+        skipped_empty = 0
+        skipped_long = 0
 
-    def _iter_jsonl_encoded(
-        self, shard_id: int, num_shards: int
-    ) -> Iterator[tuple[list[int], list[int]]]:
         for i, row in enumerate(_iter_jsonl_objects(self.jsonl_path)):
             if (i % num_shards) != shard_id:
                 continue
             conversations = row.get("conversations", [])
             if not conversations:
+                skipped_empty += 1
                 continue
             enc = self._encode_conversation(conversations)
             if enc is None:
+                skipped_empty += 1
                 continue
             input_ids, labels = enc
             if not input_ids:
+                skipped_empty += 1
                 continue
-            if len(input_ids) > self.pack_bin_size:
-                input_ids = input_ids[: self.pack_bin_size]
-                labels = labels[: self.pack_bin_size]
-            yield input_ids, labels
+            if len(input_ids) > self.max_seq_len:
+                skipped_long += 1
+                if skipped_long <= 3:
+                    logger.warning(
+                        "跳过超长样本（len=%s > max_seq_len=%s），不截断；行序≈%s",
+                        len(input_ids),
+                        self.max_seq_len,
+                        i,
+                    )
+                continue
 
-    def _iter_streaming_first_fit(
-        self, shard_id: int, num_shards: int
-    ) -> Iterator[dict[str, torch.Tensor]]:
-        bins_in: list[list[int]] = []
-        bins_lab: list[list[int]] = []
-        emitted = 0
-        seen_docs = 0
-
-        def try_place(doc_in: list[int], doc_lab: list[int]) -> bool:
-            for b_in, b_lab in zip(bins_in, bins_lab):
-                gap = 1 if b_in else 0
-                if len(b_in) + gap + len(doc_in) <= self.pack_bin_size:
-                    if gap:
-                        b_in.append(self._sep_id)
-                        b_lab.append(-100)
-                    b_in.extend(doc_in)
-                    b_lab.extend(doc_lab)
-                    return True
-            return False
-
-        def emit_bin(idx: int) -> dict[str, torch.Tensor]:
-            nonlocal emitted
-            b_in = bins_in.pop(idx)
-            b_lab = bins_lab.pop(idx)
-            emitted += 1
-            return {
-                "input_ids": torch.tensor(b_in, dtype=torch.long),
-                "labels": torch.tensor(b_lab, dtype=torch.long),
+            seen += 1
+            yield {
+                "input_ids": torch.tensor(input_ids, dtype=torch.long),
+                "labels": torch.tensor(labels, dtype=torch.long),
             }
 
-        for input_ids, labels in self._iter_jsonl_encoded(shard_id, num_shards):
-            seen_docs += 1
-            while True:
-                if try_place(input_ids, labels):
-                    break
-                if len(bins_in) >= self.max_open_bins:
-                    yield emit_bin(0)
-                    continue
-                bins_in.append(list(input_ids))
-                bins_lab.append(list(labels))
-                break
-
-        while bins_in:
-            yield emit_bin(0)
-
         logger.info(
-            "SFTDataset(packing): shard=%s/%s docs=%s emitted=%s",
+            "SFTDataset shard=%s/%s emitted=%s skipped_empty=%s skipped_long=%s",
             shard_id,
             num_shards,
-            seen_docs,
-            emitted,
+            seen,
+            skipped_empty,
+            skipped_long,
         )
 
     @staticmethod
