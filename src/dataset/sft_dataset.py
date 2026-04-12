@@ -4,6 +4,7 @@ import copy
 import json
 import logging
 import random
+import re
 from pathlib import Path
 from typing import Any, Dict, Iterator, List
 
@@ -20,6 +21,7 @@ class SFTDataset(IterableDataset):
 
     - ``pack_bin_size`` 仅表示 ``max_seq_length``：编码后 **长度超过则跳过该条**（不截断、不拆对话）。
     - 单条样本内通常 **不含** 预训练式 ``<|endoftext|>`` 合包分隔；``TrainDataCollator`` 仍按单段对话的 prefix/causal 规则构造掩码。
+    - **labels**：与 ``chat_template.jinja`` 对齐，用「模板字符串 + offset_mapping」标 assistant 段；避免子词边界导致 ``prompt[i:i+k]==encode(片段)`` 永远不匹配、进而全为 ``-100``、loss 为 nan。
     """
 
     SYSTEM_PROMPTS = [
@@ -46,10 +48,12 @@ class SFTDataset(IterableDataset):
         self.max_seq_len = int(pack_bin_size)
         self.jsonl_path = str(jsonl_path)
 
-        self.bos_enc_id = tokenizer.encode("<|im_start|>assistant\n", add_special_tokens=False)
-        self.eos_enc_id = tokenizer.encode(f"{tokenizer.eos_token}\n", add_special_tokens=False)
-
         self.add_system_ratio = 0.2
+        eos = getattr(tokenizer, "eos_token", None) or "<|im_end|>"
+        self._assistant_block = re.compile(
+            rf"<\|im_start\|>assistant\n(.*?){re.escape(eos)}",
+            re.DOTALL,
+        )
 
         logger.info(
             "SFTDataset(one-row-one-sample, no pack/truncate): path=%s max_seq_len=%s",
@@ -62,6 +66,7 @@ class SFTDataset(IterableDataset):
         seen = 0
         skipped_empty = 0
         skipped_long = 0
+        skipped_no_supervision = 0
 
         for i, row in enumerate(_iter_jsonl_objects(self.jsonl_path)):
             if (i % num_shards) != shard_id:
@@ -88,6 +93,14 @@ class SFTDataset(IterableDataset):
                         i,
                     )
                 continue
+            if not any(x != -100 for x in labels):
+                skipped_no_supervision += 1
+                if skipped_no_supervision <= 3:
+                    logger.warning(
+                        "跳过无监督 token（labels 全为 -100），行序≈%s",
+                        i,
+                    )
+                continue
 
             seen += 1
             yield {
@@ -96,12 +109,13 @@ class SFTDataset(IterableDataset):
             }
 
         logger.info(
-            "SFTDataset shard=%s/%s emitted=%s skipped_empty=%s skipped_long=%s",
+            "SFTDataset shard=%s/%s emitted=%s skipped_empty=%s skipped_long=%s skipped_no_supervision=%s",
             shard_id,
             num_shards,
             seen,
             skipped_empty,
             skipped_long,
+            skipped_no_supervision,
         )
 
     @staticmethod
@@ -161,59 +175,49 @@ class SFTDataset(IterableDataset):
 
         self._tool_calls_fill(conv)
 
-        raw = self.tokenizer.apply_chat_template(
+        text = self.tokenizer.apply_chat_template(
             conv,
-            tokenize=True,
+            tokenize=False,
             add_generation_prompt=False,
             tools=tools,
             open_think=False,
         )
-        prompt = self._coerce_chat_template_output_to_ids(raw)
+        if not isinstance(text, str):
+            logger.warning(
+                "apply_chat_template(tokenize=False) 期望 str，得到 %s，跳过该条",
+                type(text).__name__,
+            )
+            return None
 
-        labels = self.generate_labels(prompt)
-        return prompt, labels
-
-    def _coerce_chat_template_output_to_ids(self, raw: Any) -> list[int]:
-        """``apply_chat_template(tokenize=True)`` 在不同版本下可能返回 list、Tensor、或 BatchEncoding。"""
-        if isinstance(raw, str):
-            return self.tokenizer.encode(raw, add_special_tokens=False)
-        if isinstance(raw, torch.Tensor):
-            return raw.detach().cpu().flatten().tolist()
-        if isinstance(raw, dict):
-            inner = raw.get("input_ids")
-            if inner is not None:
-                return self._coerce_chat_template_output_to_ids(inner)
-        if hasattr(raw, "input_ids"):
-            inner = raw["input_ids"]
-            return self._coerce_chat_template_output_to_ids(inner)
-        if isinstance(raw, (list, tuple)):
-            return [int(x) for x in raw]
         try:
-            import numpy as np
+            enc = self.tokenizer(
+                text,
+                add_special_tokens=False,
+                return_offsets_mapping=True,
+            )
+        except (TypeError, ValueError) as e:
+            logger.warning("tokenizer 不支持 return_offsets_mapping，跳过该条: %s", e)
+            return None
+        input_ids = list(enc["input_ids"])
+        offsets = enc["offset_mapping"]
+        if hasattr(offsets, "tolist"):
+            offsets = offsets.tolist()
+        labels = self._labels_from_template_offsets(text, input_ids, offsets)
+        return input_ids, labels
 
-            if isinstance(raw, np.ndarray):
-                return raw.astype(np.int64).flatten().tolist()
-        except ImportError:
-            pass
-        raise TypeError(
-            f"无法将 apply_chat_template 输出转为 token id 列表，类型={type(raw).__name__}"
-        )
-
-    def generate_labels(self, prompt: list[int]) -> list[int]:
-        labels = [-100] * len(prompt)
-        i = 0
-        bos, eos = self.bos_enc_id, self.eos_enc_id
-        lbos, leos = len(bos), len(eos)
-        while i < len(prompt):
-            if prompt[i : i + lbos] == bos:
-                start = i + lbos
-                j = start
-                while j < len(prompt):
-                    labels[j] = prompt[j]
-                    if prompt[j : j + leos] == eos:
-                        break
-                    j += 1
-                i = j + leos if j < len(prompt) else len(prompt)
-            else:
-                i += 1
+    def _labels_from_template_offsets(
+        self,
+        text: str,
+        input_ids: list[int],
+        offset_mapping: list[tuple[int, int]],
+    ) -> list[int]:
+        """按 chat 模板字符串中的 assistant 段（含多轮）映射到 token；``<|im_end|>`` 不计入 loss。"""
+        labels = [-100] * len(input_ids)
+        for m in self._assistant_block.finditer(text):
+            c0, c1 = m.span(1)
+            for ti, (a, b) in enumerate(offset_mapping):
+                if a >= c1 or b <= c0:
+                    continue
+                if a < c1 and b > c0:
+                    labels[ti] = input_ids[ti]
         return labels

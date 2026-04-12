@@ -85,6 +85,7 @@ def test_sft_dataset_load_from_preprocess_tmp() -> None:
 
     assert "input_ids" in sample and "labels" in sample
     assert sample["input_ids"].shape == sample["labels"].shape
+    assert (sample["labels"] != -100).any().item(), "assistant 段应对齐到非 -100 的监督位"
 
 
 def test_dpo_dataset_load_with_mock_jsonl() -> None:

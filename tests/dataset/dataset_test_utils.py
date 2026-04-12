@@ -23,12 +23,16 @@ def load_local_tokenizer():
     original_apply_chat_template = tok.apply_chat_template
 
     def _apply_chat_template_adapted(*args, **kwargs):
+        # 与 HF 一致：显式 ``tokenize=False`` 时返回字符串，供 SFT 等用 offset 标监督位。
+        want_encode = kwargs.get("tokenize", True)
         kwargs.setdefault("tokenize", True)
         out = original_apply_chat_template(*args, **kwargs)
         if hasattr(out, "get") and out.get("input_ids") is not None:
             return out["input_ids"]
         if isinstance(out, str):
-            return tok.encode(out, add_special_tokens=False)
+            if want_encode:
+                return tok.encode(out, add_special_tokens=False)
+            return out
         return out
 
     tok.apply_chat_template = _apply_chat_template_adapted  # type: ignore[method-assign]
