@@ -61,18 +61,17 @@ def continuation_generate(
     do_sample: bool,
     temperature: float,
     top_p: float,
+    repetition_penalty: float,
     device: torch.device,
 ) -> str:
     enc = tokenizer(prompt, return_tensors="pt", add_special_tokens=False)
     input_ids = enc["input_ids"].to(device)
-    attention_mask = enc.get("attention_mask")
-    if attention_mask is not None:
-        attention_mask = attention_mask.to(device)
 
     gen_kwargs: dict = {
         "max_new_tokens": max_new_tokens,
         "pad_token_id": tokenizer.pad_token_id,
         "eos_token_id": getattr(tokenizer, "eos_token_id", None),
+        "repetition_penalty": repetition_penalty,
     }
     if do_sample:
         gen_kwargs["do_sample"] = True
@@ -83,7 +82,7 @@ def continuation_generate(
 
     gen_ids = model.generate(
         input_ids,
-        attention_mask=attention_mask,
+        attention_mask=None,
         **gen_kwargs,
     )
     full_text = tokenizer.decode(gen_ids[0], skip_special_tokens=True)
@@ -114,6 +113,12 @@ def main() -> None:
     parser.add_argument("--do_sample", action="store_true", help="采样；默认 greedy")
     parser.add_argument("--temperature", type=float, default=0.8)
     parser.add_argument("--top_p", type=float, default=0.95)
+    parser.add_argument(
+        "--repetition_penalty",
+        type=float,
+        default=1.2,
+        help=">1.0 抑制重复 token；1.0 表示关闭（与 Transformers generate 一致）",
+    )
     args = parser.parse_args()
 
     ck = resolve_under_project(args.checkpoint)
@@ -138,6 +143,7 @@ def main() -> None:
         do_sample=args.do_sample,
         temperature=args.temperature,
         top_p=args.top_p,
+        repetition_penalty=args.repetition_penalty,
         device=device,
     )
 

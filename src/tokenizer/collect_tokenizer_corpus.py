@@ -7,7 +7,8 @@ import random
 from pathlib import Path
 from typing import Any
 
-from src.ref_model import get_auto_tokenizer_local
+import jinja2.exceptions
+from transformers.utils.chat_template_utils import render_jinja_template
 
 """
 本文件执行脚本
@@ -55,7 +56,7 @@ def parse_args() -> argparse.Namespace:
         "--tokenizer-path",
         type=str,
         default="tokenizer/minilm",
-        help="Tokenizer dir used for apply_chat_template on SFT samples.",
+        help="Directory containing chat_template.jinja (SFT 文本由该模板渲染，不加载 HF tokenizer)。",
     )
     parser.add_argument(
         "--output-path",
@@ -158,8 +159,23 @@ def _fill_assistant_tool_calls(conv: list[dict[str, Any]]) -> bool:
     return True
 
 
+def _render_chat_template(
+    chat_template: str,
+    messages: list[dict[str, Any]],
+    tools: list[dict[str, Any]] | None,
+) -> str:
+    rendered, _ = render_jinja_template(
+        conversations=[messages],
+        tools=tools,
+        chat_template=chat_template,
+        add_generation_prompt=False,
+        open_think=False,
+    )
+    return rendered[0]
+
+
 def _build_sft_text(
-    tokenizer,
+    chat_template: str,
     conversations: list[dict[str, Any]],
     add_system_ratio: float,
     rng: random.Random,
@@ -183,20 +199,9 @@ def _build_sft_text(
         return None
 
     try:
-        text = tokenizer.apply_chat_template(
-            conv,
-            add_generation_prompt=False,
-            tokenize=False,
-            tools=tools,
-            open_think=False,
-        )
-    except TypeError:
-        text = tokenizer.apply_chat_template(
-            conv,
-            add_generation_prompt=False,
-            tokenize=False,
-            tools=tools,
-        )
+        text = _render_chat_template(chat_template, conv, tools)
+    except jinja2.exceptions.TemplateError:
+        return None
     if not isinstance(text, str):
         return None
     text = text.strip()
@@ -257,7 +262,7 @@ def collect_pretrain_texts(
 
 def collect_sft_texts(
     sft_jsonl: Path,
-    tokenizer,
+    chat_template: str,
     rng: random.Random,
     max_rows: int | None = None,
     add_system_ratio: float = 0.2,
@@ -278,7 +283,7 @@ def collect_sft_texts(
         if not isinstance(conversations, list) or not conversations:
             continue
         text = _build_sft_text(
-            tokenizer,
+            chat_template,
             conversations,
             add_system_ratio=add_system_ratio,
             rng=rng,
@@ -334,9 +339,12 @@ def main() -> None:
     if pretrain_path is None and sft_path is None:
         raise ValueError("At least one of --pretrain-jsonl or --sft-jsonl must be provided.")
 
-    tokenizer = None
+    chat_template_for_sft = ""
     if sft_path is not None:
-        tokenizer = get_auto_tokenizer_local(args.tokenizer_path, trust_remote_code=True)
+        tpl_path = Path(args.tokenizer_path) / "chat_template.jinja"
+        if not tpl_path.is_file():
+            raise FileNotFoundError(f"未找到 chat 模板文件: {tpl_path}")
+        chat_template_for_sft = tpl_path.read_text(encoding="utf-8")
 
     all_texts: list[str] = []
 
@@ -352,13 +360,13 @@ def main() -> None:
     if sft_path is not None:
         sft_texts = collect_sft_texts(
             sft_path,
-            tokenizer=tokenizer,
+            chat_template=chat_template_for_sft,
             rng=rng,
             max_rows=args.max_sft_rows,
             add_system_ratio=args.sft_add_system_ratio,
             tool_sample_ratio=args.sft_tool_sample_ratio,
         )
-        print(f"[collect] sft(apply_chat_template): {len(sft_texts)}")
+        print(f"[collect] sft(chat_template.jinja): {len(sft_texts)}")
         all_texts.extend(sft_texts)
 
     rng.shuffle(all_texts)

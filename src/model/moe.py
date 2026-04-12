@@ -82,8 +82,9 @@ class Moe(nn.Module):
             tokens = x[idx]  # [T, H]
             out = self.routed_experts[expert_id](tokens)  # [T, H]
 
-            # 加权累加（scatter add）
-            expert_outputs.index_add_(0, idx, out * w.unsqueeze(-1))
+            # 加权累加（scatter add）；autocast 下 out 可能与 expert_outputs（与 x 同 dtype）不一致
+            scaled = out * w.unsqueeze(-1)
+            expert_outputs.index_add_(0, idx, scaled.to(dtype=expert_outputs.dtype))
             start = end
 
         y = expert_outputs.view(B, S, H)

@@ -131,7 +131,21 @@ class MiniLmForCausalLM(PreTrainedModel, GenerationMixin):
         :return: 含 logits、可选 loss、past_key_values 等的因果 LM 输出。
         """
 
-        if attention_mask is None and input_ids is not None:
+        # 训练 / DataCollator：(B, 1, S, S) bool；generate 常给 (B, S) 的 padding mask。
+        # SDPA 不会把 2D 自动变成与训练一致的因果 4D，需在入口处对齐为 (B, 1, S, S) bool。
+        if attention_mask is not None and attention_mask.dim() == 2:
+            attention_mask = self._padding_mask_2d_to_4d_causal(attention_mask)
+            # 增量解码：当前步 input 长度 q 可能为 1，而 2D mask 长度为总长 L（含 cache）。
+            # 需取完整 L×L 掩码的最后 q 行，得到 (B, 1, q, L)，与 query (…, q, ·)、key (…, L, ·) 一致。
+            cur_len = (
+                input_ids.shape[1]
+                if input_ids is not None
+                else inputs_embeds.shape[1]
+            )
+            L = attention_mask.shape[-1]
+            if cur_len < L:
+                attention_mask = attention_mask[:, :, -cur_len:, :]
+        elif attention_mask is None and input_ids is not None:
             attention_mask = self._make_causal_attention(input_ids)
 
         outputs: MiniLMModelOutputWithPast = self.model(
@@ -165,11 +179,29 @@ class MiniLmForCausalLM(PreTrainedModel, GenerationMixin):
         )
 
     @staticmethod
+    def _padding_mask_2d_to_4d_causal(mask_2d: torch.Tensor) -> torch.Tensor:
+        """HF 风格 (B, L) padding mask -> 与 ``_make_causal_attention`` 一致的 (B, 1, L, L) bool。
+
+        位置 i 可看 j 当且仅当：下三角因果、且 i/j 在 padding mask 上均为有效 token。
+        """
+        valid = mask_2d if mask_2d.dtype == torch.bool else (mask_2d != 0)
+        batch, seq_len = valid.shape
+        device = valid.device
+        causal = torch.tril(
+            torch.ones((seq_len, seq_len), dtype=torch.bool, device=device),
+            diagonal=0,
+        )
+        v_i = valid.unsqueeze(2)
+        v_j = valid.unsqueeze(1)
+        mask_4d = (v_i & v_j) & causal.unsqueeze(0)
+        return mask_4d.unsqueeze(1)
+
+    @staticmethod
     def _make_causal_attention(input_ids: torch.Tensor):
         # 自回归模型，默认添加自回归掩码
         batch, seq_len = input_ids.shape
         mask = torch.full((batch, seq_len, seq_len),
-                          1, device=input_ids.device, dtype=torch.long)
+                          1, device=input_ids.device, dtype=torch.bool)
         mask.tril_(diagonal=0)
 
         for b in range(batch):
