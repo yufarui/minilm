@@ -14,6 +14,11 @@ from src.dataset.pre_train_dataset import PreTrainDataset, _iter_jsonl_objects
 
 logger = logging.getLogger(__name__)
 
+# 训练入口不传参时使用以下默认；需调整 packing 策略时在构造 SFTDataset 时显式传入。
+DEFAULT_PACK_SORT_ORDER = "file_order"
+DEFAULT_MAX_OPEN_BINS = 512
+DEFAULT_SORT_BUFFER_SIZE = 4096
+
 
 class SFTDataset(IterableDataset):
     """对话 SFT：JSONL 流式逐行读取，边编码边打包，不一次性载入全量再 packing。
@@ -40,9 +45,9 @@ class SFTDataset(IterableDataset):
         jsonl_path: str | Path,
         tokenizer,
         pack_bin_size: int,
-        pack_sort_order: str = "file_order",
-        max_open_bins: int = 512,
-        sort_buffer_size: int = 4096,
+        pack_sort_order: str = DEFAULT_PACK_SORT_ORDER,
+        max_open_bins: int = DEFAULT_MAX_OPEN_BINS,
+        sort_buffer_size: int = DEFAULT_SORT_BUFFER_SIZE,
     ) -> None:
         super().__init__()
         self.tokenizer = tokenizer
