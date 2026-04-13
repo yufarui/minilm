@@ -189,20 +189,20 @@ class SFTDataset(IterableDataset):
             )
             return None
 
-        try:
-            enc = self.tokenizer(
-                text,
-                add_special_tokens=False,
-                return_offsets_mapping=True,
-            )
-        except (TypeError, ValueError) as e:
-            logger.warning("tokenizer 不支持 return_offsets_mapping，跳过该条: %s", e)
-            return None
+        enc = self.tokenizer(
+            text,
+            add_special_tokens=False,
+            return_offsets_mapping=True,
+        )
         input_ids = list(enc["input_ids"])
         offsets = enc["offset_mapping"]
         if hasattr(offsets, "tolist"):
             offsets = offsets.tolist()
         labels = self._labels_from_template_offsets(text, input_ids, offsets)
+        # 抽样检查正确性
+        r = random.random()
+        if r < 0.1:
+            logger.info(f"text\n:{text},")
         return input_ids, labels
 
     def _labels_from_template_offsets(
@@ -221,3 +221,15 @@ class SFTDataset(IterableDataset):
                 if a < c1 and b > c0:
                     labels[ti] = input_ids[ti]
         return labels
+
+if __name__ == "__main__":
+    from src.ref_model.tokenizer_local import get_auto_tokenizer_local
+    from src.util.path_util import resolve_under_project
+
+    tok_path = resolve_under_project("tokenizer/minilm")
+    tokenizer = get_auto_tokenizer_local(tok_path, trust_remote_code=True)
+    train_dataset = SFTDataset(
+        "data/stf/sft_train.jsonl",
+        tokenizer,
+        pack_bin_size=8192,
+    )
