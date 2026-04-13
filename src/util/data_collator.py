@@ -140,7 +140,7 @@ class TrainDataCollator:
                 else:
                     next_seg_end = seq_len
                 if next_seg_end > seg_start and seg_end > seg_start:
-                    prefix_attn_mask[seg_start:next_seg_end, seg_start:seg_end] = True
+                    prefix_attn_mask[seg_start:next_seg_end, 0:seg_end] = True
         return prefix_attn_mask
 
     def label_block(self, input_ids, labels):

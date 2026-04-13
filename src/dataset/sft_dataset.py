@@ -21,7 +21,7 @@ class SFTDataset(IterableDataset):
 
     - ``pack_bin_size`` 仅表示 ``max_seq_length``：编码后 **长度超过则跳过该条**（不截断、不拆对话）。
     - 单条样本内通常 **不含** 预训练式 ``<|endoftext|>`` 合包分隔；``TrainDataCollator`` 仍按单段对话的 prefix/causal 规则构造掩码。
-    - **labels**：与 ``chat_template.jinja`` 对齐，用「模板字符串 + offset_mapping」标 assistant 段；避免子词边界导致 ``prompt[i:i+k]==encode(片段)`` 永远不匹配、进而全为 ``-100``、loss 为 nan。
+    - **labels**：与 ``chat_template.jinja`` 对齐，用「模板字符串 + offset_mapping」标 assistant 回复及本轮 ``eos``；避免子词边界导致子序列匹配失败、全 ``-100``、loss 为 nan。
     """
 
     SYSTEM_PROMPTS = [
@@ -211,10 +211,14 @@ class SFTDataset(IterableDataset):
         input_ids: list[int],
         offset_mapping: list[tuple[int, int]],
     ) -> list[int]:
-        """按 chat 模板字符串中的 assistant 段（含多轮）映射到 token；``<|im_end|>`` 不计入 loss。"""
+        """按 chat 模板字符串中的 assistant 段（含多轮）映射到 token。
+
+        监督区间含本轮结束的 eos（如 ``<|im_end|>``），使模型学习在何处停止。
+        """
         labels = [-100] * len(input_ids)
         for m in self._assistant_block.finditer(text):
-            c0, c1 = m.span(1)
+            # group(1)=正文；end(0) 含 eos，与「预测到结束符再停」一致
+            c0, c1 = m.start(1), m.end(0)
             for ti, (a, b) in enumerate(offset_mapping):
                 if a >= c1 or b <= c0:
                     continue
@@ -233,3 +237,5 @@ if __name__ == "__main__":
         tokenizer,
         pack_bin_size=8192,
     )
+    for i in train_dataset:
+        print(i)

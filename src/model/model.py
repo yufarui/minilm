@@ -168,7 +168,10 @@ class MiniLmForCausalLM(PreTrainedModel, GenerationMixin):
 
         loss = None
         if labels is not None:
-            loss = self.loss_function(logits=logits, labels=labels, vocab_size=self.vocab_size)
+            # 与 HF CausalLM 一致：传入 num_items_in_batch 等，便于 Trainer 在梯度累积下正确缩放 loss
+            loss = self.loss_function(
+                logits=logits, labels=labels, vocab_size=self.vocab_size, **kwargs
+            )
             loss = loss + outputs.aux_loss
 
         return MiniLMCausalLMOutputWithPast(
