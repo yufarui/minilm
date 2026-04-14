@@ -4,7 +4,7 @@ import logging
 import sys
 
 from transformers import TrainingArguments
-from trl import DPOTrainer
+from trl import DPOConfig, DPOTrainer
 
 from src.config.data_arguments import DpoDataArguments
 from src.config.logging_config import setup_logging
@@ -44,17 +44,23 @@ def run_dpo(training_args: TrainingArguments, data_args: DpoDataArguments) -> No
     elif training_args.do_eval and not data_args.eval_data_path:
         logger.warning("do_eval=True 但未提供 eval_data_path，将跳过验证。")
 
-    trainer = DPOTrainer(
-        model=model,
-        ref_model=ref_model,
-        args=training_args,
-        train_dataset=train_dataset,
-        eval_dataset=eval_dataset,
-        tokenizer=tokenizer,
+    # TRL 1.x expects DPO-specific fields (beta/max_prompt_length/...) in DPOConfig(args),
+    # not as standalone DPOTrainer kwargs.
+    dpo_args = DPOConfig(
+        **training_args.to_dict(),
         beta=float(data_args.dpo_beta),
         max_prompt_length=int(data_args.max_prompt_length),
         max_length=int(data_args.max_seq_length),
         truncation_mode=data_args.truncation_mode,
+    )
+
+    trainer = DPOTrainer(
+        model=model,
+        ref_model=ref_model,
+        args=dpo_args,
+        train_dataset=train_dataset,
+        eval_dataset=eval_dataset,
+        processing_class=tokenizer,
     )
 
     train_result = trainer.train(resume_from_checkpoint=training_args.resume_from_checkpoint)
