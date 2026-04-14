@@ -44,15 +44,14 @@ def run_dpo(training_args: TrainingArguments, data_args: DpoDataArguments) -> No
     elif training_args.do_eval and not data_args.eval_data_path:
         logger.warning("do_eval=True 但未提供 eval_data_path，将跳过验证。")
 
-    # TRL 1.x expects DPO-specific fields (beta/max_prompt_length/...) in DPOConfig(args),
-    # not as standalone DPOTrainer kwargs.
-    dpo_args = DPOConfig(
-        **training_args.to_dict(),
-        beta=float(data_args.dpo_beta),
-        max_prompt_length=int(data_args.max_prompt_length),
-        max_length=int(data_args.max_seq_length),
-        truncation_mode=data_args.truncation_mode,
-    )
+    dpo_args = DPOConfig(**training_args.to_dict())
+    dpo_args.beta = float(data_args.dpo_beta)
+    if hasattr(dpo_args, "max_length"):
+        dpo_args.max_length = int(data_args.max_seq_length)
+    if hasattr(dpo_args, "max_prompt_length"):
+        dpo_args.max_prompt_length = int(data_args.max_prompt_length)
+    if hasattr(dpo_args, "truncation_mode"):
+        dpo_args.truncation_mode = data_args.truncation_mode
 
     trainer = DPOTrainer(
         model=model,
