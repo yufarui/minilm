@@ -68,6 +68,53 @@ def test_attention_mask_prefix_mode_runs(local_tokenizer):
     assert set(torch.unique(mask).tolist()).issubset({0, 1})
 
 
+def test_attention_mask_segment_isolation_and_causality(local_tokenizer):
+    sep = local_tokenizer.convert_tokens_to_ids("<|endoftext|>")
+    collator = TrainDataCollator(local_tokenizer, ignore_index=-100)
+    features = [
+        {
+            "input_ids": [101, 102, sep, 201, 202, sep, 301],
+            "labels": [101, 102, sep, 201, 202, sep, 301],
+        }
+    ]
+
+    batch = collator(features)
+    mask = batch["attention_mask"][0, 0]
+
+    print(f"mask {mask.shape}\n", mask)
+
+    # 段0: [101, 102, sep]，段1: [201, 202, sep]，段2: [301]
+    # 段1中的token不能看见段0
+    assert mask[3, :3].sum().item() == 0
+    assert mask[4, :3].sum().item() == 0
+
+    # 段2中的token不能看见段0和段1
+    assert mask[6, :6].sum().item() == 0
+
+    # 段内保持因果
+    assert mask[4, 3].item() == 1
+    assert mask[3, 4].item() == 0
+
+
+def test_attention_mask_padding_queries_and_keys_are_blocked(local_tokenizer):
+    sep = local_tokenizer.convert_tokens_to_ids("<|endoftext|>")
+    collator = TrainDataCollator(local_tokenizer, ignore_index=-100)
+    features = [
+        {"input_ids": [11, 12, sep, 21], "labels": [11, 12, sep, 21]},
+        {"input_ids": [31, 32], "labels": [31, 32]},
+    ]
+
+    batch = collator(features)
+    mask = batch["attention_mask"][1, 0]  # 第二条样本被padding到长度4
+
+    print(f"mask {mask.shape}\n", mask)
+
+    # padding 的 key 不可见
+    assert mask[:, 2:].sum().item() == 0
+    # padding 的 query 不可发起注意力
+    assert mask[2:, :].sum().item() == 0
+
+
 @torch.no_grad()
 def test_collator_outputs_feed_model_forward(tiny_config, local_tokenizer):
     sep = local_tokenizer.convert_tokens_to_ids("<|endoftext|>")

@@ -47,7 +47,9 @@ class MiniLMModel(PreTrainedModel):
         if attention_mask is None:
             return None
 
-        # 输入约定: [batch, seq_len], 1 表示可见，0 表示 pad。
+        # 输入约定:
+        # - 2D [batch, seq_len]：1/True 表示非 pad 可见，模型内部补齐 causal。
+        # - 非 2D（如外部显式传入的 4D）：视为完整掩码，直接透传。
         if attention_mask.dim() != 2:
             return attention_mask
 
@@ -165,8 +167,8 @@ class MiniLmForCausalLM(PreTrainedModel, GenerationMixin):
         """
         :param input_ids: 输入 token 索引；与 inputs_embeds 二选一。
         :param attention_mask: 注意力掩码，用于屏蔽 padding 等无效位置。
-        :param position_ids: 各 token 的 RoPE 位置；默认连续 arange。预训练 packing 下由 ``TrainDataCollator``
-            在 ``pad_token_id``（文档分隔）处归零，与 attention 中的 pack 掩码一致。
+        :param position_ids: 各 token 的 RoPE 位置；默认连续 arange。packing 场景下可由 ``TrainDataCollator``
+            在 ``<|endoftext|>`` 分段处归零，pad 区固定为 0。
         :param past_key_values: 历史 KV 缓存，用于增量解码（生成时复用前文）。
         :param inputs_embeds: 已算好的词嵌入；与 input_ids 二选一。
         :param labels: 语言建模标签；提供时计算交叉熵 loss。

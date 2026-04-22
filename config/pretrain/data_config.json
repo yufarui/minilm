@@ -11,6 +11,13 @@
     {"pack_bin_size": 8192}
   ],
   "pack_sort_order": "file_order",
+  "diag_every_n_steps": 1000,
+  "diag_num_eval_batches": 1,
+  "diag_gen_every_n_steps": 1000,
+  "diag_gen_max_new_tokens": 64,
+  "diag_gen_prompts_json": "config/pretrain/diag_gen_prompts.json",
+  "diag_gen_do_sample": false,
+  "diag_gen_temperature": 0.8,
   "swanlab_diag_log_attn_every": 1000,
   "swanlab_diag_log_hidden_every": 1000
 }

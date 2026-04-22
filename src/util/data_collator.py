@@ -9,10 +9,11 @@ logger = logging.getLogger(__name__)
 
 
 class TrainDataCollator:
-    """预训练 / SFT 共用：动态 padding + packing 段隔离。
 
-    - 预训练：``labels`` 与 ``input_ids`` 一致，全程参与 loss → 标准因果掩码 + packing 隔断。
-    - SFT：仅部分位置 ``labels != ignore_index`` → 前缀全互见 + 各监督段内因果。
+    """预训练 / SFT 共用：动态 padding + 分段因果掩码。
+
+    - 预训练：``labels`` 与 ``input_ids`` 一致，全程参与 loss；attention_mask 为 4D 分段因果掩码。
+    - SFT：保留数据侧 ``labels=-100`` 的监督选择逻辑；attention_mask 在每个 ``<|endoftext|>`` 分段内独立计算。
     - RoPE：在 **pack 分隔符**（默认 ``<|endoftext|>``）处将位置计数归零，
       使各文档段内为 0,1,2,…；batch 右侧对齐填充的 ``position_ids`` 为 0（与掩码一致）。
     """
@@ -73,7 +74,7 @@ class TrainDataCollator:
                 padded_lab = lab
                 padded_pos = pos_ids
 
-            attn_mask = self._make_attn_mask(padded_ids, padded_lab)
+            attn_mask = self._make_attn_mask(padded_ids)
 
             batch_input_ids.append(padded_ids)
             batch_labels.append(padded_lab)
@@ -87,11 +88,32 @@ class TrainDataCollator:
             "attention_mask": torch.stack(attention_masks),
         }
 
-    def _make_attn_mask(
-            self, input_ids: torch.Tensor, labels: torch.Tensor
-    ) -> torch.Tensor:
+    def _make_attn_mask(self, input_ids: torch.Tensor) -> torch.Tensor:
+        # 4D 掩码: [1, q_len, k_len]
+        # 1) pad query/key 全屏蔽
+        # 2) 因果可见（j <= i）
+        # 3) 仅同一 pack 分段（由 <|endoftext|> 切分）内可见
+        seq_len = input_ids.shape[0]
+        device = input_ids.device
 
-        attn_mask = self._packing_prefix_attn_mask(input_ids, labels)
+        non_pad = (input_ids != self.pad_token_id)
+        segment_ids = torch.full((seq_len,), -1, dtype=torch.long, device=device)
+
+        current_segment = 0
+        for idx in range(seq_len):
+            token_id = input_ids[idx]
+            if token_id == self.pad_token_id:
+                continue
+            segment_ids[idx] = current_segment
+            if token_id == self.pack_sep_token_id:
+                current_segment += 1
+
+        same_segment = (segment_ids.unsqueeze(0) == segment_ids.unsqueeze(1)) & (segment_ids.unsqueeze(0) >= 0)
+        causal = torch.tril(torch.ones((seq_len, seq_len), dtype=torch.bool, device=device))
+        valid_query = non_pad.unsqueeze(1)
+        valid_key = non_pad.unsqueeze(0)
+
+        attn_mask = same_segment & causal & valid_query & valid_key
         return attn_mask.unsqueeze(0)
 
     def _packed_position_ids_1d(self, input_ids: torch.Tensor) -> torch.Tensor:
@@ -120,64 +142,3 @@ class TrainDataCollator:
 
         return position_ids
 
-    def _packing_prefix_attn_mask(self, input_ids: torch.Tensor, labels: torch.Tensor, ) -> torch.Tensor:
-        seq_len = input_ids.shape[0]
-        prefix_attn_mask = torch.zeros(seq_len, seq_len, dtype=torch.bool, device=input_ids.device)
-
-        label_blocks = self.label_block(input_ids, labels)
-
-        for index, block in enumerate(label_blocks):
-            seg_start, seg_end, block_type = block
-            if block_type == "causal":
-                seg_len = seg_end - seg_start
-                prefix_attn_mask[seg_start: seg_end, seg_start: seg_end] = (
-                    torch.tril(torch.ones(seg_len, seg_len, dtype=torch.bool, device=input_ids.device), diagonal=0)
-                )
-            elif block_type == "prefix":
-                # 约定 prefix 后为 causal；若序列末尾仅有 prefix（无后续块），不能读 label_blocks[index+1]。
-                if index + 1 < len(label_blocks):
-                    next_seg_end = label_blocks[index + 1][1]
-                else:
-                    next_seg_end = seq_len
-                if next_seg_end > seg_start and seg_end > seg_start:
-                    prefix_attn_mask[seg_start:next_seg_end, 0:seg_end] = True
-        return prefix_attn_mask
-
-    def label_block(self, input_ids, labels):
-
-        ignore_index = self.ignore_index
-        pack_sep_token_id = self.pack_sep_token_id
-        pad_token_id = self.pad_token_id
-
-        labels_block: list[tuple[int, int, str]] = []
-        ids = input_ids.tolist()
-        lbs = labels.tolist()
-        seq_len = len(ids)
-        start = 0
-
-        while start < seq_len:
-
-            if lbs[start] == ignore_index and ids[start] not in [pack_sep_token_id, pad_token_id]:
-                # 连续 prefix 段（不计 loss）
-                end = start + 1
-                while end < seq_len and lbs[end] == ignore_index:
-                    end += 1
-                labels_block.append((start, end, "prefix"))
-                start = end
-                continue
-
-            if lbs[start] == ids[start]:
-                # 连续 causal 段（计 loss）
-                end = start + 1
-                while end < seq_len and lbs[end] == ids[end]:
-                    if ids[end] == pack_sep_token_id:
-                        end += 1
-                        break
-                    end += 1
-                labels_block.append((start, end, "causal"))
-                start = end
-                continue
-
-            start += 1
-
-        return labels_block

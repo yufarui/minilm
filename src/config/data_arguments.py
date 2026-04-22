@@ -52,7 +52,7 @@ class TrainDataArguments:
         },
     )
     diag_every_n_steps: int = field(
-        default=0,
+        default=500,
         metadata={
             "help": "TrainingDiagnosticsCallback：每隔多少 global_step 在验证集上算 next-token top-1 与熵；0 关闭"
         },
@@ -62,7 +62,7 @@ class TrainDataArguments:
         metadata={"help": "诊断回调在验证集上最多前向的 micro-batch 数"},
     )
     diag_gen_every_n_steps: int = field(
-        default=0,
+        default=500,
         metadata={
             "help": "TrainingDiagnosticsCallback：每隔多少步用固定前缀做 greedy/sample 生成并打日志；0 关闭"
         },

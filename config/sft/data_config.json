@@ -9,7 +9,7 @@
   "max_seq_length": 8192,
   "pack_bin_size": 8192,
 
-  "diag_every_n_steps": 0,
+  "diag_every_n_steps": 500,
   "diag_num_eval_batches": 1,
   "diag_gen_every_n_steps": 500,
   "diag_gen_max_new_tokens": 64,

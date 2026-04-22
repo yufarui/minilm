@@ -80,7 +80,7 @@ d = {'input_ids': torch.tensor([16001, 785, 199, 371, 1158, 9452, 288, 3417, 117
                              2049, 569, 1019, 296, 1177, 1843, 11478, 5905, 440, 1043,
                              2131, 415, 263, -100, -100])}
 
-x = data_collate._packing_prefix_attn_mask(d["input_ids"], d["labels"])
+x = data_collate._make_attn_mask(d["input_ids"])
 print(x)
 
 enc_doc = tokenizer.decode(d["input_ids"])
