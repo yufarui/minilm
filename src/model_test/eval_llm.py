@@ -1,11 +1,11 @@
 """
-使用已训练好的预训练 checkpoint 批量测试，并将结果保存为 Excel。
+使用已训练好的指令微调（SFT）checkpoint 批量测试，并将结果保存为 Excel。
 
 示例:
 uv run src/model_test/eval_llm.py\
-  --checkpoint checkpoints/pretrain --latest \
-  --prompts_file data/pretrain/test.txt \
-  --output_excel outputs/pretrain_test_results.xlsx
+  --checkpoint checkpoints/sft --latest \
+  --prompts_file data/sft/test.txt \
+  --output_excel outputs/sft_test_results.xlsx
 """
 
 from __future__ import annotations
@@ -86,12 +86,21 @@ def _generate_text(
         repetition_penalty: float,
         device: torch.device,
 ) -> str:
-    encoded = tokenizer(prompt, return_tensors="pt", add_special_tokens=False)
+    messages = [{"role": "user", "content": prompt}]
+    chat_prompt = tokenizer.apply_chat_template(
+        messages,
+        tokenize=False,
+        add_generation_prompt=True,
+    )
+    print("chat_prompt", chat_prompt)
+    encoded = tokenizer(chat_prompt, return_tensors="pt", add_special_tokens=False)
     input_ids = encoded["input_ids"].to(device)
     attention_mask = encoded.get("attention_mask")
+    print("attention_mask", attention_mask)
+    if attention_mask is not None:
+        attention_mask = attention_mask.to(device)
 
-    eot_id = tokenizer.convert_tokens_to_ids("<|endoftext|>")
-    eos_token_id = int(eot_id) if isinstance(eot_id, int) and eot_id >= 0 else None
+    eos_token_id = getattr(tokenizer, "eos_token_id", None)
 
     generate_kwargs: dict = {
         "max_new_tokens": max_new_tokens,
@@ -113,7 +122,6 @@ def _generate_text(
     )
     # generate 返回的是 [prompt + new_tokens]，仅解码新增部分便于观察模型是否实际续写。
     new_token_ids = output_ids[0, input_ids.shape[1]:]
-    print("new_token_ids", new_token_ids)
     return tokenizer.decode(new_token_ids, skip_special_tokens=True)
 
 
@@ -123,7 +131,7 @@ def _save_to_excel(
 ) -> None:
     workbook = Workbook()
     sheet = workbook.active
-    sheet.title = "pretrain_test_results"
+    sheet.title = "sft_test_results"
 
     headers = [
         "sample_id",
@@ -143,7 +151,7 @@ def _save_to_excel(
 
 def main() -> None:
     parser = argparse.ArgumentParser(
-        description="基于预训练 checkpoint 批量测试并导出 Excel。"
+        description="基于指令微调（SFT）checkpoint 批量测试并导出 Excel。"
     )
     parser.add_argument(
         "--checkpoint",
@@ -167,7 +175,7 @@ def main() -> None:
     parser.add_argument(
         "--output_excel",
         type=str,
-        default="outputs/pretrain_test_results.xlsx",
+        default="outputs/sft_test_results.xlsx",
         help="Excel 输出路径。",
     )
     parser.add_argument("--max_new_tokens", type=int, default=60)
