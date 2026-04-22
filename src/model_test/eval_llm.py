@@ -2,10 +2,10 @@
 使用已训练好的预训练 checkpoint 批量测试，并将结果保存为 Excel。
 
 示例:
-  python -m src.model_test.eval_llm ^
-      --checkpoint checkpoints/pretrain --latest ^
-      --prompts_file data/test_prompts.txt ^
-      --output_excel outputs/pretrain_test_results.xlsx
+uv run src/model_test/eval_llm.py\
+  --checkpoint checkpoints/pretrain --latest \
+  --prompts_file data/pretrain/test.txt \
+  --output_excel outputs/pretrain_test_results.xlsx
 """
 
 from __future__ import annotations
@@ -88,6 +88,7 @@ def _generate_text(
 ) -> str:
     encoded = tokenizer(prompt, return_tensors="pt", add_special_tokens=False)
     input_ids = encoded["input_ids"].to(device)
+    attention_mask = encoded.get("attention_mask")
 
     generate_kwargs: dict = {
         "max_new_tokens": max_new_tokens,
@@ -104,7 +105,7 @@ def _generate_text(
 
     output_ids = model.generate(
         input_ids,
-        attention_mask=None,
+        attention_mask=attention_mask,
         **generate_kwargs,
     )
     return tokenizer.decode(output_ids[0], skip_special_tokens=True)
@@ -163,7 +164,7 @@ def main() -> None:
         default="outputs/pretrain_test_results.xlsx",
         help="Excel 输出路径。",
     )
-    parser.add_argument("--max_new_tokens", type=int, default=128)
+    parser.add_argument("--max_new_tokens", type=int, default=60)
     parser.add_argument("--do_sample", action="store_true", help="开启采样；默认 greedy。")
     parser.add_argument("--temperature", type=float, default=0.8)
     parser.add_argument("--top_p", type=float, default=0.95)

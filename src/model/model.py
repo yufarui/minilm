@@ -35,6 +35,40 @@ class MiniLMModel(PreTrainedModel):
 
         self.post_init()
 
+    @staticmethod
+    def _prepare_autoregressive_attention_mask(
+            attention_mask: torch.Tensor | None,
+            batch_size: int,
+            query_length: int,
+            key_length: int,
+            past_seen_tokens: int,
+            device: torch.device,
+    ) -> torch.Tensor | None:
+        if attention_mask is None:
+            return None
+
+        # 输入约定: [batch, seq_len], 1 表示可见，0 表示 pad。
+        if attention_mask.dim() != 2:
+            return attention_mask
+
+        if attention_mask.size(0) != batch_size:
+            raise ValueError(
+                f"attention_mask batch size mismatch: got {attention_mask.size(0)}, expected {batch_size}"
+            )
+
+        if attention_mask.size(1) != key_length:
+            raise ValueError(
+                f"attention_mask key length mismatch: got {attention_mask.size(1)}, expected {key_length}"
+            )
+
+        key_padding_mask = attention_mask.to(device=device).bool().unsqueeze(1).unsqueeze(1)
+
+        query_positions = torch.arange(query_length, device=device) + past_seen_tokens
+        key_positions = torch.arange(key_length, device=device)
+        causal_mask = (key_positions.unsqueeze(0) <= query_positions.unsqueeze(1)).unsqueeze(0).unsqueeze(0)
+
+        return key_padding_mask & causal_mask
+
     def forward(
             self,
             input_ids: torch.LongTensor | None = None,
@@ -54,13 +88,24 @@ class MiniLMModel(PreTrainedModel):
 
         batch, seq_len, hidden_size = inputs_embeds.shape
 
+        past_seen_tokens = (past_key_values.get_seq_length() if past_key_values is not None else 0)
+
         if use_cache and past_key_values is None:
             past_key_values = DynamicCache(config=self.config)
 
         if position_ids is None:
-            past_seen_tokens = (past_key_values.get_seq_length() if past_key_values is not None else 0)
             position_ids = (torch.arange(seq_len, device=inputs_embeds.device) + past_seen_tokens)
             position_ids = position_ids.unsqueeze(0)
+
+        key_length = past_seen_tokens + seq_len
+        attention_mask = self._prepare_autoregressive_attention_mask(
+            attention_mask=attention_mask,
+            batch_size=batch,
+            query_length=seq_len,
+            key_length=key_length,
+            past_seen_tokens=past_seen_tokens,
+            device=inputs_embeds.device,
+        )
 
         hidden_states = inputs_embeds
         position_embeddings = self.rotary_emb(hidden_states, position_ids)
@@ -131,23 +176,6 @@ class MiniLmForCausalLM(PreTrainedModel, GenerationMixin):
         :return: 含 logits、可选 loss、past_key_values 等的因果 LM 输出。
         """
 
-        # 训练 / DataCollator：(B, 1, S, S) bool；generate 常给 (B, S) 的 padding mask。
-        # SDPA 不会把 2D 自动变成与训练一致的因果 4D，需在入口处对齐为 (B, 1, S, S) bool。
-        if attention_mask is not None and attention_mask.dim() == 2:
-            attention_mask = self._padding_mask_2d_to_4d_causal(attention_mask)
-            # 增量解码：当前步 input 长度 q 可能为 1，而 2D mask 长度为总长 L（含 cache）。
-            # 需取完整 L×L 掩码的最后 q 行，得到 (B, 1, q, L)，与 query (…, q, ·)、key (…, L, ·) 一致。
-            cur_len = (
-                input_ids.shape[1]
-                if input_ids is not None
-                else inputs_embeds.shape[1]
-            )
-            L = attention_mask.shape[-1]
-            if cur_len < L:
-                attention_mask = attention_mask[:, :, -cur_len:, :]
-        elif attention_mask is None and input_ids is not None:
-            attention_mask = self._make_causal_attention(input_ids)
-
         outputs: MiniLMModelOutputWithPast = self.model(
             input_ids,
             attention_mask=attention_mask,
@@ -180,37 +208,3 @@ class MiniLmForCausalLM(PreTrainedModel, GenerationMixin):
             aux_loss=outputs.aux_loss,
             loss=loss,
         )
-
-    @staticmethod
-    def _padding_mask_2d_to_4d_causal(mask_2d: torch.Tensor) -> torch.Tensor:
-        """HF 风格 (B, L) padding mask -> 与 ``_make_causal_attention`` 一致的 (B, 1, L, L) bool。
-
-        位置 i 可看 j 当且仅当：下三角因果、且 i/j 在 padding mask 上均为有效 token。
-        """
-        valid = mask_2d if mask_2d.dtype == torch.bool else (mask_2d != 0)
-        batch, seq_len = valid.shape
-        device = valid.device
-        causal = torch.tril(
-            torch.ones((seq_len, seq_len), dtype=torch.bool, device=device),
-            diagonal=0,
-        )
-        v_i = valid.unsqueeze(2)
-        v_j = valid.unsqueeze(1)
-        mask_4d = (v_i & v_j) & causal.unsqueeze(0)
-        return mask_4d.unsqueeze(1)
-
-    @staticmethod
-    def _make_causal_attention(input_ids: torch.Tensor):
-        # 自回归模型，默认添加自回归掩码
-        batch, seq_len = input_ids.shape
-        mask = torch.full((batch, seq_len, seq_len),
-                          1, device=input_ids.device, dtype=torch.bool)
-        mask.tril_(diagonal=0)
-
-        for b in range(batch):
-            pad_positions = torch.where(input_ids[b] == 0)
-            for i in pad_positions[0]:
-                mask[b, i, :] = 0
-                mask[b, :, i] = 0
-
-        return mask.unsqueeze(1)
