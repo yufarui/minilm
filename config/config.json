@@ -1,8 +1,6 @@
 {
   "attention_dropout": 0.0,
   "aux_loss_alpha": 0.01,
-  "bos_token_id": 1,
-  "eos_token_id": 2,
   "hidden_act": "silu",
   "hidden_dropout": 0.0,
   "hidden_size": 768,
