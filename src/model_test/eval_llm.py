@@ -76,24 +76,27 @@ def _load_samples_from_file(path: Path) -> list[TestSample]:
 
 @torch.no_grad()
 def _generate_text(
-    model: MiniLmForCausalLM,
-    tokenizer,
-    prompt: str,
-    max_new_tokens: int,
-    do_sample: bool,
-    temperature: float,
-    top_p: float,
-    repetition_penalty: float,
-    device: torch.device,
+        model: MiniLmForCausalLM,
+        tokenizer,
+        prompt: str,
+        max_new_tokens: int,
+        do_sample: bool,
+        temperature: float,
+        top_p: float,
+        repetition_penalty: float,
+        device: torch.device,
 ) -> str:
     encoded = tokenizer(prompt, return_tensors="pt", add_special_tokens=False)
     input_ids = encoded["input_ids"].to(device)
     attention_mask = encoded.get("attention_mask")
 
+    eot_id = tokenizer.convert_tokens_to_ids("<|endoftext|>")
+    eos_token_id = int(eot_id) if isinstance(eot_id, int) and eot_id >= 0 else None
+
     generate_kwargs: dict = {
         "max_new_tokens": max_new_tokens,
         "pad_token_id": tokenizer.pad_token_id,
-        "eos_token_id": getattr(tokenizer, "eos_token_id", None),
+        "eos_token_id": eos_token_id,
         "repetition_penalty": repetition_penalty,
     }
     if do_sample:
@@ -108,12 +111,15 @@ def _generate_text(
         attention_mask=attention_mask,
         **generate_kwargs,
     )
-    return tokenizer.decode(output_ids[0], skip_special_tokens=True)
+    # generate 返回的是 [prompt + new_tokens]，仅解码新增部分便于观察模型是否实际续写。
+    new_token_ids = output_ids[0, input_ids.shape[1]:]
+    print("new_token_ids", new_token_ids)
+    return tokenizer.decode(new_token_ids, skip_special_tokens=True)
 
 
 def _save_to_excel(
-    rows: list[dict[str, str | int | float]],
-    output_path: Path,
+        rows: list[dict[str, str | int | float]],
+        output_path: Path,
 ) -> None:
     workbook = Workbook()
     sheet = workbook.active
