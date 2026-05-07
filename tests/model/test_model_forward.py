@@ -19,6 +19,17 @@ def test_minilm_model_inputs_embeds_path(tiny_config):
     assert out.last_hidden_state.shape == embeds.shape
 
 
+def test_minilm_model_uses_causal_mask_when_attention_mask_omitted(tiny_config):
+    model = MiniLMModel(tiny_config).eval()
+    input_ids = torch.randint(1, tiny_config.vocab_size, (2, 6))
+    causal_mask = torch.tril(torch.ones(2, 1, 6, 6, dtype=torch.bool))
+
+    implicit = model(input_ids=input_ids, use_cache=False).last_hidden_state
+    explicit = model(input_ids=input_ids, attention_mask=causal_mask, use_cache=False).last_hidden_state
+
+    assert torch.allclose(implicit, explicit, atol=1e-5, rtol=1e-5)
+
+
 def test_minilm_model_invalid_input_raises(tiny_config):
     model = MiniLMModel(tiny_config).eval()
     input_ids = torch.randint(0, tiny_config.vocab_size, (1, 3))
