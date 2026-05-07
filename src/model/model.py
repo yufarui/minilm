@@ -43,33 +43,49 @@ class MiniLMModel(PreTrainedModel):
             key_length: int,
             past_seen_tokens: int,
             device: torch.device,
+            input_ids: torch.Tensor | None = None,
+            pad_token_id: int | None = None,
     ) -> torch.Tensor | None:
-        if attention_mask is None:
-            return None
-
         # 输入约定:
+        # - None：模型内部补齐 causal；若当前步 input_ids 可用，同时屏蔽当前 pad query/key。
         # - 2D [batch, seq_len]：1/True 表示非 pad 可见，模型内部补齐 causal。
         # - 非 2D（如外部显式传入的 4D）：视为完整掩码，直接透传。
-        if attention_mask.dim() != 2:
+        if attention_mask is not None and attention_mask.dim() != 2:
             return attention_mask
 
-        if attention_mask.size(0) != batch_size:
+        if attention_mask is not None and attention_mask.size(0) != batch_size:
             raise ValueError(
                 f"attention_mask batch size mismatch: got {attention_mask.size(0)}, expected {batch_size}"
             )
 
-        if attention_mask.size(1) != key_length:
+        if attention_mask is not None and attention_mask.size(1) != key_length:
             raise ValueError(
                 f"attention_mask key length mismatch: got {attention_mask.size(1)}, expected {key_length}"
             )
 
-        key_padding_mask = attention_mask.to(device=device).bool().unsqueeze(1).unsqueeze(1)
+        if attention_mask is None:
+            key_padding_mask = torch.ones((batch_size, key_length), dtype=torch.bool, device=device)
+            query_padding_mask = torch.ones((batch_size, query_length), dtype=torch.bool, device=device)
+            if input_ids is not None and pad_token_id is not None:
+                current_padding_mask = input_ids.to(device=device).ne(pad_token_id)
+                if current_padding_mask.shape == (batch_size, query_length):
+                    query_padding_mask = current_padding_mask
+                    if key_length == query_length:
+                        key_padding_mask = current_padding_mask
+        else:
+            padding_mask = attention_mask.to(device=device).bool()
+            key_padding_mask = padding_mask
+            query_padding_mask = padding_mask[:, past_seen_tokens: past_seen_tokens + query_length]
 
         query_positions = torch.arange(query_length, device=device) + past_seen_tokens
         key_positions = torch.arange(key_length, device=device)
         causal_mask = (key_positions.unsqueeze(0) <= query_positions.unsqueeze(1)).unsqueeze(0).unsqueeze(0)
 
-        return key_padding_mask & causal_mask
+        return (
+            key_padding_mask.unsqueeze(1).unsqueeze(1)
+            & query_padding_mask.unsqueeze(1).unsqueeze(3)
+            & causal_mask
+        )
 
     def forward(
             self,
@@ -107,6 +123,8 @@ class MiniLMModel(PreTrainedModel):
             key_length=key_length,
             past_seen_tokens=past_seen_tokens,
             device=inputs_embeds.device,
+            input_ids=input_ids,
+            pad_token_id=self.padding_idx,
         )
 
         hidden_states = inputs_embeds
