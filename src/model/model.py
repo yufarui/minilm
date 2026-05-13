@@ -45,7 +45,9 @@ class MiniLMModel(PreTrainedModel):
             device: torch.device,
     ) -> torch.Tensor | None:
         if attention_mask is None:
-            return None
+            query_positions = torch.arange(query_length, device=device) + past_seen_tokens
+            key_positions = torch.arange(key_length, device=device)
+            return (key_positions.unsqueeze(0) <= query_positions.unsqueeze(1)).unsqueeze(0).unsqueeze(0)
 
         # 输入约定:
         # - 2D [batch, seq_len]：1/True 表示非 pad 可见，模型内部补齐 causal。
