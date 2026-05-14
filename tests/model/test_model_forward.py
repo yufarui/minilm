@@ -12,6 +12,23 @@ def test_minilm_model_forward_shape_and_cache(tiny_config):
     assert torch.isfinite(out.last_hidden_state).all()
 
 
+@torch.no_grad()
+def test_minilm_model_default_attention_mask_is_causal(tiny_config):
+    model = MiniLMModel(tiny_config).eval()
+    input_ids = torch.randint(0, tiny_config.vocab_size, (1, 6))
+    seqlen = input_ids.shape[1]
+    causal_mask = torch.tril(torch.ones(1, 1, seqlen, seqlen, dtype=torch.bool))
+
+    default_out = model(input_ids=input_ids, use_cache=False).last_hidden_state
+    explicit_out = model(
+        input_ids=input_ids,
+        attention_mask=causal_mask,
+        use_cache=False,
+    ).last_hidden_state
+
+    assert torch.allclose(default_out, explicit_out, atol=1e-5, rtol=1e-5)
+
+
 def test_minilm_model_inputs_embeds_path(tiny_config):
     model = MiniLMModel(tiny_config).eval()
     embeds = torch.randn(2, 5, tiny_config.hidden_size)
