@@ -14,8 +14,8 @@ class TrainDataCollator:
 
     - 预训练：``labels`` 与 ``input_ids`` 一致，全程参与 loss；attention_mask 为 4D 分段因果掩码。
     - SFT：保留数据侧 ``labels=-100`` 的监督选择逻辑；attention_mask 在每个 ``<|endoftext|>`` 分段内独立计算。
-    - RoPE：在 **pack 分隔符**（默认 ``<|endoftext|>``）处将位置计数归零，
-      使各文档段内为 0,1,2,…；batch 右侧对齐填充的 ``position_ids`` 为 0（与掩码一致）。
+    - RoPE：**pack 分隔符**（默认 ``<|endoftext|>``）保留当前段末尾位置，
+      分隔符后的下一段重新从 0 计数；batch 右侧对齐填充的 ``position_ids`` 为 0（与掩码一致）。
     """
 
     def __init__(
@@ -123,22 +123,16 @@ class TrainDataCollator:
         seq_len = input_ids.shape[0]
 
         current_pos = 0
-        in_segment = False
-
         for t in range(seq_len):
-            if input_ids[t] == self.pack_sep_token_id:
-                position_ids[t] = 0
-                current_pos = 0
-                in_segment = False
             if input_ids[t] == self.pad_token_id:
                 # 最后的动态填充区，会出现pad
                 position_ids[t] = 0
             else:
-                if not in_segment:
-                    in_segment = True
-                    current_pos = 0
                 position_ids[t] = current_pos
-                current_pos += 1
+                if input_ids[t] == self.pack_sep_token_id:
+                    current_pos = 0
+                else:
+                    current_pos += 1
 
         return position_ids
 
