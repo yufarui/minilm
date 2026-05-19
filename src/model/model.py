@@ -44,14 +44,38 @@ class MiniLMModel(PreTrainedModel):
             past_seen_tokens: int,
             device: torch.device,
     ) -> torch.Tensor | None:
-        if attention_mask is None:
-            return None
-
         # 输入约定:
         # - 2D [batch, seq_len]：1/True 表示非 pad 可见，模型内部补齐 causal。
-        # - 非 2D（如外部显式传入的 4D）：视为完整掩码，直接透传。
+        # - 4D [batch, 1, q_len, key_len]：外部显式掩码；增量解码时可传完整 LxL 掩码并在此裁剪。
+        query_positions = torch.arange(query_length, device=device) + past_seen_tokens
+        key_positions = torch.arange(key_length, device=device)
+        causal_mask = (key_positions.unsqueeze(0) <= query_positions.unsqueeze(1)).unsqueeze(0).unsqueeze(0)
+
+        if attention_mask is None:
+            return causal_mask.expand(batch_size, 1, query_length, key_length)
+
+        if attention_mask.dim() == 4:
+            mask_4d = attention_mask.to(device=device).bool()
+            if mask_4d.size(0) != batch_size:
+                raise ValueError(
+                    f"attention_mask batch size mismatch: got {mask_4d.size(0)}, expected {batch_size}"
+                )
+            if mask_4d.size(-1) != key_length:
+                raise ValueError(
+                    f"attention_mask key length mismatch: got {mask_4d.size(-1)}, expected {key_length}"
+                )
+            if mask_4d.size(-2) == key_length and query_length < key_length:
+                mask_4d = mask_4d[:, :, -query_length:, :]
+            if mask_4d.size(-2) != query_length:
+                raise ValueError(
+                    f"attention_mask query length mismatch: got {mask_4d.size(-2)}, expected {query_length}"
+                )
+            return mask_4d
+
         if attention_mask.dim() != 2:
-            return attention_mask
+            raise ValueError(
+                f"attention_mask must be 2D or 4D, got {attention_mask.dim()}D"
+            )
 
         if attention_mask.size(0) != batch_size:
             raise ValueError(
@@ -64,10 +88,6 @@ class MiniLMModel(PreTrainedModel):
             )
 
         key_padding_mask = attention_mask.to(device=device).bool().unsqueeze(1).unsqueeze(1)
-
-        query_positions = torch.arange(query_length, device=device) + past_seen_tokens
-        key_positions = torch.arange(key_length, device=device)
-        causal_mask = (key_positions.unsqueeze(0) <= query_positions.unsqueeze(1)).unsqueeze(0).unsqueeze(0)
 
         return key_padding_mask & causal_mask
 
