@@ -10,10 +10,10 @@ logger = logging.getLogger(__name__)
 
 class TrainDataCollator:
 
-    """预训练 / SFT 共用：动态 padding + 分段因果掩码。
+    """预训练 / SFT 共用：动态 padding + packing 段隔离。
 
     - 预训练：``labels`` 与 ``input_ids`` 一致，全程参与 loss；attention_mask 为 4D 分段因果掩码。
-    - SFT：保留数据侧 ``labels=-100`` 的监督选择逻辑；attention_mask 在每个 ``<|endoftext|>`` 分段内独立计算。
+    - SFT：仅部分位置 ``labels != ignore_index``；每个 pack 段内 prefix 全互见，监督段保持因果。
     - RoPE：在 **pack 分隔符**（默认 ``<|endoftext|>``）处将位置计数归零，
       使各文档段内为 0,1,2,…；batch 右侧对齐填充的 ``position_ids`` 为 0（与掩码一致）。
     """
@@ -74,7 +74,7 @@ class TrainDataCollator:
                 padded_lab = lab
                 padded_pos = pos_ids
 
-            attn_mask = self._make_attn_mask(padded_ids)
+            attn_mask = self._make_attn_mask(padded_ids, padded_lab)
 
             batch_input_ids.append(padded_ids)
             batch_labels.append(padded_lab)
@@ -88,33 +88,59 @@ class TrainDataCollator:
             "attention_mask": torch.stack(attention_masks),
         }
 
-    def _make_attn_mask(self, input_ids: torch.Tensor) -> torch.Tensor:
-        # 4D 掩码: [1, q_len, k_len]
-        # 1) pad query/key 全屏蔽
-        # 2) 因果可见（j <= i）
-        # 3) 仅同一 pack 分段（由 <|endoftext|> 切分）内可见
+    def _make_attn_mask(self, input_ids: torch.Tensor, labels: torch.Tensor) -> torch.Tensor:
         seq_len = input_ids.shape[0]
         device = input_ids.device
+        attn_mask = torch.zeros((seq_len, seq_len), dtype=torch.bool, device=device)
 
-        non_pad = (input_ids != self.pad_token_id)
-        segment_ids = torch.full((seq_len,), -1, dtype=torch.long, device=device)
-
-        current_segment = 0
-        for idx in range(seq_len):
-            token_id = input_ids[idx]
-            if token_id == self.pad_token_id:
+        seg_start = 0
+        while seg_start < seq_len:
+            if input_ids[seg_start] == self.pad_token_id:
+                seg_start += 1
                 continue
-            segment_ids[idx] = current_segment
-            if token_id == self.pack_sep_token_id:
-                current_segment += 1
 
-        same_segment = (segment_ids.unsqueeze(0) == segment_ids.unsqueeze(1)) & (segment_ids.unsqueeze(0) >= 0)
-        causal = torch.tril(torch.ones((seq_len, seq_len), dtype=torch.bool, device=device))
-        valid_query = non_pad.unsqueeze(1)
-        valid_key = non_pad.unsqueeze(0)
+            seg_end = seg_start
+            while seg_end < seq_len and input_ids[seg_end] != self.pad_token_id:
+                seg_end += 1
+                if input_ids[seg_end - 1] == self.pack_sep_token_id:
+                    break
 
-        attn_mask = same_segment & causal & valid_query & valid_key
+            self._fill_prefix_causal_segment(attn_mask, labels, seg_start, seg_end)
+            seg_start = seg_end
+
         return attn_mask.unsqueeze(0)
+
+    def _fill_prefix_causal_segment(
+        self,
+        attn_mask: torch.Tensor,
+        labels: torch.Tensor,
+        seg_start: int,
+        seg_end: int,
+    ) -> None:
+        blocks: list[tuple[int, int, str]] = []
+        start = seg_start
+        while start < seg_end:
+            block_type = "prefix" if labels[start] == self.ignore_index else "causal"
+            end = start + 1
+            if block_type == "prefix":
+                while end < seg_end and labels[end] == self.ignore_index:
+                    end += 1
+            else:
+                while end < seg_end and labels[end] != self.ignore_index:
+                    end += 1
+            blocks.append((start, end, block_type))
+            start = end
+
+        for index, (start, end, block_type) in enumerate(blocks):
+            if block_type == "causal":
+                seg_len = end - start
+                attn_mask[start:end, start:end] = torch.tril(
+                    torch.ones((seg_len, seg_len), dtype=torch.bool, device=attn_mask.device)
+                )
+                continue
+
+            rows_end = blocks[index + 1][1] if index + 1 < len(blocks) else end
+            attn_mask[start:rows_end, seg_start:end] = True
 
     def _packed_position_ids_1d(self, input_ids: torch.Tensor) -> torch.Tensor:
 
@@ -126,18 +152,18 @@ class TrainDataCollator:
         in_segment = False
 
         for t in range(seq_len):
-            if input_ids[t] == self.pack_sep_token_id:
-                position_ids[t] = 0
-                current_pos = 0
-                in_segment = False
             if input_ids[t] == self.pad_token_id:
                 # 最后的动态填充区，会出现pad
                 position_ids[t] = 0
+                continue
+            if not in_segment:
+                in_segment = True
+                current_pos = 0
+            position_ids[t] = current_pos
+            if input_ids[t] == self.pack_sep_token_id:
+                current_pos = 0
+                in_segment = False
             else:
-                if not in_segment:
-                    in_segment = True
-                    current_pos = 0
-                position_ids[t] = current_pos
                 current_pos += 1
 
         return position_ids

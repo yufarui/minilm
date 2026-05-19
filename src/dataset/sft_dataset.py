@@ -119,7 +119,7 @@ class SFTDataset(IterableDataset):
         )
 
     @staticmethod
-    def _tool_calls_fill(conv: List[Dict[str, Any]]):
+    def _tool_calls_fill(conv: List[Dict[str, Any]]) -> bool:
         """
         chat_template.jinja 需要 assistant.tool_calls 为列表；
         JSONL 里常为 JSON 字符串，否则 Jinja 会按字符迭代。
@@ -133,16 +133,26 @@ class SFTDataset(IterableDataset):
             raw = msg["tool_calls"]
             if isinstance(raw, list):
                 continue
-            if not isinstance(raw, str):
-                logger.warning("assistant.tool_calls 类型无效（%s），跳过该字段", type(raw).__name__)
+            if raw is None:
                 msg.pop("tool_calls", None)
                 continue
+            if not isinstance(raw, str):
+                logger.warning("assistant.tool_calls 类型无效（%s），跳过该条", type(raw).__name__)
+                return False
             s = raw.strip()
+            if not s:
+                msg.pop("tool_calls", None)
+                continue
             try:
-                msg["tool_calls"] = json.loads(s)
+                parsed = json.loads(s)
             except json.JSONDecodeError as e:
                 logger.warning("assistant.tool_calls JSON 无效，跳过该条: %s", e)
-                msg.pop("tool_calls", None)
+                return False
+            if not isinstance(parsed, list):
+                logger.warning("assistant.tool_calls JSON 需为列表，跳过该条")
+                return False
+            msg["tool_calls"] = parsed
+        return True
 
     def _encode_conversation(self, conversations: List[Dict[str, Any]]) -> tuple[list[int], list[int]] | None:
         """返回 (input_ids, labels)；不修改原始样本。"""
@@ -173,7 +183,8 @@ class SFTDataset(IterableDataset):
             if random.random() < self.add_system_ratio:
                 conv.insert(0, {"role": "system", "content": random.choice(self.SYSTEM_PROMPTS)})
 
-        self._tool_calls_fill(conv)
+        if not self._tool_calls_fill(conv):
+            return None
 
         text = self.tokenizer.apply_chat_template(
             conv,

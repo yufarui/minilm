@@ -146,17 +146,16 @@ class PreTrainDataset(IterableDataset):
     def _iter_token_ids_parquet_shards(
         self, shard_id: int, num_shards: int, parquet_files: list[Path]
     ) -> Iterator[list[int]]:
-        """按文件分配给 shard，尽量避免多个 worker 竞争同一 parquet 文件。"""
-        my_files = [f for i, f in enumerate(parquet_files) if i % num_shards == shard_id]
-        for file_path in my_files:
+        """按全局行号切分目录内 parquet，避免文件数少于 DDP/worker 分片数时空分片。"""
+        global_idx = 0
+        for file_path in parquet_files:
             pf = pq.ParquetFile(str(file_path))
-            table = pf.read(columns=["input_ids"])
-            ids_array = table.column("input_ids")
-            for chunk in ids_array.chunks:
-                for i in range(len(chunk)):
-                    ids = chunk[i].as_py()
-                    if ids:
+            for batch in pf.iter_batches(columns=["input_ids"], batch_size=2048):
+                col = batch.column(0).to_pylist()
+                for ids in col:
+                    if global_idx % num_shards == shard_id and ids:
                         yield list(ids)
+                    global_idx += 1
 
     @staticmethod
     def _shard_info() -> tuple[int, int]:

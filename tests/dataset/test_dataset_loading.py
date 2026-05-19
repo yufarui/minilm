@@ -1,8 +1,10 @@
 import json
 import pytest
 from itertools import islice
+from pathlib import Path
 
 from src.dataset.dpo_dataset import DPODataset
+from src.dataset import pre_train_dataset as pretrain_module
 from src.dataset.pre_train_dataset import PreTrainDataset
 from src.dataset.sft_dataset import SFTDataset
 
@@ -14,6 +16,7 @@ from .dataset_test_utils import (
     SFT_TOOLS_STRING_JSONL,
     ensure_preprocess_tmp,
     load_local_tokenizer,
+    write_jsonl,
 )
 
 
@@ -99,6 +102,7 @@ def test_dpo_dataset_load_with_mock_jsonl() -> None:
     assert len(ds) == 10
     row = ds[0]
     assert row["prompt"]
+    assert row["prompt"].endswith("<|im_start|>assistant\n")
     assert row["chosen"]
     assert row["rejected"]
 
@@ -114,3 +118,83 @@ def test_sft_dataset_loads_stringified_tools_and_tool_calls() -> None:
     # tools/tool_calls 为字符串 JSON 时也应可被解析并编码进模板文本。
     assert ("random_number" in text) or ("get_exchange_rate" in text)
     assert "69" in text
+
+
+def test_sft_tool_calls_fill_rejects_invalid_non_empty_json() -> None:
+    conv = [{"role": "assistant", "content": "", "tool_calls": "{not-json"}]
+    assert SFTDataset._tool_calls_fill(conv) is False
+
+
+def test_sft_dataset_skips_invalid_tool_calls_json(tmp_path) -> None:
+    tok = load_local_tokenizer()
+    path = tmp_path / "sft_invalid_tool_calls.jsonl"
+    write_jsonl(
+        path,
+        [
+            {
+                "conversations": [
+                    {"role": "user", "content": "call a tool"},
+                    {"role": "assistant", "content": "", "tool_calls": "{not-json"},
+                    {"role": "tool", "content": "bad result"},
+                    {"role": "assistant", "content": "bad sample should be skipped"},
+                ]
+            },
+            {
+                "conversations": [
+                    {"role": "user", "content": "hello"},
+                    {"role": "assistant", "content": "valid answer"},
+                ]
+            },
+        ],
+    )
+
+    ds = SFTDataset(path, tok, pack_bin_size=512)
+    encoded = next(iter(ds))
+    text = tok.decode(encoded["input_ids"].tolist())
+    assert "valid answer" in text
+    assert "bad sample should be skipped" not in text
+
+
+def test_pretrain_parquet_directory_sharding_is_row_level(monkeypatch, tmp_path) -> None:
+    class FakeColumn:
+        def __init__(self, rows):
+            self._rows = rows
+
+        def to_pylist(self):
+            return self._rows
+
+    class FakeBatch:
+        def __init__(self, rows):
+            self._rows = rows
+
+        def column(self, index):
+            assert index == 0
+            return FakeColumn(self._rows)
+
+    rows_by_file = {
+        "part-0.parquet": [[0], [1], [2]],
+        "part-1.parquet": [[3], [4], [5]],
+    }
+
+    class FakeParquetFile:
+        def __init__(self, path):
+            self._name = Path(path).name
+
+        def iter_batches(self, columns, batch_size):
+            assert columns == ["input_ids"]
+            assert batch_size == 2048
+            yield FakeBatch(rows_by_file[self._name])
+
+    monkeypatch.setattr(pretrain_module.pq, "ParquetFile", FakeParquetFile)
+    parquet_files = [tmp_path / "part-0.parquet", tmp_path / "part-1.parquet"]
+    ds = PreTrainDataset.__new__(PreTrainDataset)
+
+    rows = []
+    shard_lengths = []
+    for shard_id in range(4):
+        shard_rows = list(ds._iter_token_ids_parquet_shards(shard_id, 4, parquet_files))
+        shard_lengths.append(len(shard_rows))
+        rows.extend(shard_rows)
+
+    assert sorted(row[0] for row in rows) == list(range(6))
+    assert all(length > 0 for length in shard_lengths)

@@ -25,3 +25,17 @@ def test_minilm_model_invalid_input_raises(tiny_config):
     embeds = torch.randn(1, 3, tiny_config.hidden_size)
     with pytest.raises(ValueError):
         model(input_ids=input_ids, inputs_embeds=embeds)
+
+
+def test_prepare_attention_mask_defaults_to_causal():
+    mask = MiniLMModel._prepare_autoregressive_attention_mask(
+        attention_mask=None,
+        batch_size=2,
+        query_length=3,
+        key_length=3,
+        past_seen_tokens=0,
+        device=torch.device("cpu"),
+    )
+
+    expected = torch.tril(torch.ones(3, 3, dtype=torch.bool)).expand(2, 1, 3, 3)
+    assert torch.equal(mask, expected)
