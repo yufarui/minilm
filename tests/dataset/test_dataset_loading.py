@@ -14,6 +14,7 @@ from .dataset_test_utils import (
     SFT_TOOLS_STRING_JSONL,
     ensure_preprocess_tmp,
     load_local_tokenizer,
+    write_jsonl,
 )
 
 
@@ -99,8 +100,48 @@ def test_dpo_dataset_load_with_mock_jsonl() -> None:
     assert len(ds) == 10
     row = ds[0]
     assert row["prompt"]
+    assert row["prompt"].endswith("<|im_start|>assistant\n")
     assert row["chosen"]
+    assert row["chosen"].endswith("<|im_end|>\n")
     assert row["rejected"]
+    assert row["rejected"].endswith("<|im_end|>\n")
+
+
+def test_dpo_dataset_renders_chat_completion_suffix(tmp_path) -> None:
+    tok = load_local_tokenizer()
+    dpo_path = tmp_path / "dpo_tool_calls.jsonl"
+    write_jsonl(
+        dpo_path,
+        [
+            {
+                "chosen": [
+                    {"content": "Which city should I check?", "role": "user"},
+                    {
+                        "content": "I will check Paris.",
+                        "role": "assistant",
+                        "tool_calls": [
+                            {"name": "lookup_weather", "arguments": {"city": "Paris"}},
+                        ],
+                    },
+                ],
+                "rejected": [
+                    {"content": "Which city should I check?", "role": "user"},
+                    {"content": "No lookup needed.", "role": "assistant"},
+                ],
+            }
+        ],
+    )
+
+    row = DPODataset(dpo_path, tokenizer=tok).as_hf_dataset()[0]
+
+    assert row["prompt"].endswith("<|im_start|>assistant\n")
+    assert row["chosen"].startswith("I will check Paris.")
+    assert "<|im_start|>assistant" not in row["chosen"]
+    assert "<tool_call>" in row["chosen"]
+    assert "lookup_weather" in row["chosen"]
+    assert "Paris" in row["chosen"]
+    assert row["chosen"].endswith("<|im_end|>\n")
+    assert row["rejected"] == "No lookup needed.<|im_end|>\n"
 
 
 def test_sft_dataset_loads_stringified_tools_and_tool_calls() -> None:

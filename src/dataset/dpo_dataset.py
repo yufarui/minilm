@@ -62,6 +62,53 @@ class DPODataset:
                 return None
         return None
 
+    @staticmethod
+    def _normalize_tool_calls(messages: list[dict[str, Any]]) -> None:
+        for msg in messages:
+            if msg.get("role") != "assistant" or "tool_calls" not in msg:
+                continue
+            raw = msg["tool_calls"]
+            if isinstance(raw, list):
+                continue
+            if isinstance(raw, str):
+                s = raw.strip()
+                if not s:
+                    msg.pop("tool_calls", None)
+                    continue
+                try:
+                    msg["tool_calls"] = json.loads(s)
+                except json.JSONDecodeError as e:
+                    logger.warning("assistant.tool_calls JSON 无效，将不渲染该字段: %s", e)
+                    msg.pop("tool_calls", None)
+                continue
+            logger.warning("assistant.tool_calls 类型无效（%s），将不渲染该字段", type(raw).__name__)
+            msg.pop("tool_calls", None)
+
+    @staticmethod
+    def _render_chat_template(
+        tokenizer: PreTrainedTokenizerBase,
+        messages: list[dict[str, Any]],
+        *,
+        add_generation_prompt: bool,
+        tools: list[Any] | None,
+    ) -> str:
+        rendered = tokenizer.apply_chat_template(
+            messages,
+            tokenize=False,
+            add_generation_prompt=add_generation_prompt,
+            tools=tools,
+            open_think=False,
+        )
+        if isinstance(rendered, str):
+            return rendered
+        return tokenizer.decode(rendered) if hasattr(rendered, "tolist") else str(rendered)
+
+    @staticmethod
+    def _completion_from_rendered(full_text: str, prompt: str) -> str:
+        if not full_text.startswith(prompt):
+            raise ValueError("DPO chat 模板渲染不一致，无法从完整对话中切分 completion。")
+        return full_text[len(prompt):]
+
     @classmethod
     def _chat_triplet(
         cls,
@@ -91,20 +138,34 @@ class DPODataset:
                     break
 
         tools = cls._tools_from_messages(prefix_c)
-        prompt = tokenizer.apply_chat_template(
+        cls._normalize_tool_calls(prefix_c)
+        chosen_final = dict(chosen[-1])
+        rejected_final = dict(rejected[-1])
+        cls._normalize_tool_calls([chosen_final, rejected_final])
+
+        prompt = cls._render_chat_template(
+            tokenizer,
             prefix_c,
-            tokenize=False,
+            add_generation_prompt=True,
+            tools=tools,
+        )
+        chosen_text = cls._render_chat_template(
+            tokenizer,
+            prefix_c + [chosen_final],
             add_generation_prompt=False,
             tools=tools,
-            open_think=False,
         )
-        if not isinstance(prompt, str):
-            prompt = tokenizer.decode(prompt) if hasattr(prompt, "tolist") else str(prompt)
+        rejected_text = cls._render_chat_template(
+            tokenizer,
+            prefix_c + [rejected_final],
+            add_generation_prompt=False,
+            tools=tools,
+        )
 
         return {
             "prompt": prompt,
-            "chosen": str(chosen[-1]["content"]),
-            "rejected": str(rejected[-1]["content"]),
+            "chosen": cls._completion_from_rendered(chosen_text, prompt),
+            "rejected": cls._completion_from_rendered(rejected_text, prompt),
         }
 
     @classmethod
