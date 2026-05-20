@@ -74,7 +74,7 @@ class TrainDataCollator:
                 padded_lab = lab
                 padded_pos = pos_ids
 
-            attn_mask = self._make_attn_mask(padded_ids)
+            attn_mask = self._make_attn_mask(padded_ids, padded_lab)
 
             batch_input_ids.append(padded_ids)
             batch_labels.append(padded_lab)
@@ -88,10 +88,10 @@ class TrainDataCollator:
             "attention_mask": torch.stack(attention_masks),
         }
 
-    def _make_attn_mask(self, input_ids: torch.Tensor) -> torch.Tensor:
+    def _make_attn_mask(self, input_ids: torch.Tensor, labels: torch.Tensor) -> torch.Tensor:
         # 4D 掩码: [1, q_len, k_len]
         # 1) pad query/key 全屏蔽
-        # 2) 因果可见（j <= i）
+        # 2) 因果可见（j <= i）；SFT 中连续 prefix token（labels=-100）块内双向可见
         # 3) 仅同一 pack 分段（由 <|endoftext|> 切分）内可见
         seq_len = input_ids.shape[0]
         device = input_ids.device
@@ -110,10 +110,11 @@ class TrainDataCollator:
 
         same_segment = (segment_ids.unsqueeze(0) == segment_ids.unsqueeze(1)) & (segment_ids.unsqueeze(0) >= 0)
         causal = torch.tril(torch.ones((seq_len, seq_len), dtype=torch.bool, device=device))
+        prefix_blocks = self._prefix_block_mask(input_ids, labels, segment_ids)
         valid_query = non_pad.unsqueeze(1)
         valid_key = non_pad.unsqueeze(0)
 
-        attn_mask = same_segment & causal & valid_query & valid_key
+        attn_mask = same_segment & (causal | prefix_blocks) & valid_query & valid_key
         return attn_mask.unsqueeze(0)
 
     def _packed_position_ids_1d(self, input_ids: torch.Tensor) -> torch.Tensor:
@@ -123,22 +124,50 @@ class TrainDataCollator:
         seq_len = input_ids.shape[0]
 
         current_pos = 0
-        in_segment = False
 
         for t in range(seq_len):
-            if input_ids[t] == self.pack_sep_token_id:
-                position_ids[t] = 0
-                current_pos = 0
-                in_segment = False
             if input_ids[t] == self.pad_token_id:
                 # 最后的动态填充区，会出现pad
                 position_ids[t] = 0
-            else:
-                if not in_segment:
-                    in_segment = True
-                    current_pos = 0
-                position_ids[t] = current_pos
-                current_pos += 1
+                continue
+
+            position_ids[t] = current_pos
+            current_pos += 1
+            if input_ids[t] == self.pack_sep_token_id:
+                current_pos = 0
 
         return position_ids
+
+    def _prefix_block_mask(
+            self,
+            input_ids: torch.Tensor,
+            labels: torch.Tensor,
+            segment_ids: torch.Tensor,
+    ) -> torch.Tensor:
+        seq_len = input_ids.shape[0]
+        device = input_ids.device
+        mask = torch.zeros((seq_len, seq_len), dtype=torch.bool, device=device)
+
+        prefix = (
+            (labels == self.ignore_index)
+            & (input_ids != self.pad_token_id)
+            & (input_ids != self.pack_sep_token_id)
+            & (segment_ids >= 0)
+        )
+
+        start = 0
+        while start < seq_len:
+            if not prefix[start]:
+                start += 1
+                continue
+
+            segment = segment_ids[start]
+            end = start + 1
+            while end < seq_len and prefix[end] and segment_ids[end] == segment:
+                end += 1
+
+            mask[start:end, start:end] = True
+            start = end
+
+        return mask
 
