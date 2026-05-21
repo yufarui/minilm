@@ -45,7 +45,9 @@ class MiniLMModel(PreTrainedModel):
             device: torch.device,
     ) -> torch.Tensor | None:
         if attention_mask is None:
-            return None
+            attention_mask = torch.ones(
+                batch_size, key_length, device=device, dtype=torch.bool
+            )
 
         # 输入约定:
         # - 2D [batch, seq_len]：1/True 表示非 pad 可见，模型内部补齐 causal。
