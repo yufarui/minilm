@@ -38,16 +38,32 @@ class MiniLMModel(PreTrainedModel):
     @staticmethod
     def _prepare_autoregressive_attention_mask(
             attention_mask: torch.Tensor | None,
+            input_ids: torch.LongTensor | None,
             batch_size: int,
             query_length: int,
             key_length: int,
             past_seen_tokens: int,
             device: torch.device,
+            pad_token_id: int | None,
     ) -> torch.Tensor | None:
         if attention_mask is None:
-            return None
+            if (
+                    input_ids is not None
+                    and input_ids.dim() == 2
+                    and input_ids.size(0) == batch_size
+                    and input_ids.size(1) == key_length
+                    and pad_token_id is not None
+            ):
+                attention_mask = input_ids.ne(pad_token_id)
+            else:
+                attention_mask = torch.ones(
+                    (batch_size, key_length),
+                    dtype=torch.bool,
+                    device=device,
+                )
 
         # 输入约定:
+        # - None：默认所有 key 非 pad，并在模型内部补齐 causal。
         # - 2D [batch, seq_len]：1/True 表示非 pad 可见，模型内部补齐 causal。
         # - 非 2D（如外部显式传入的 4D）：视为完整掩码，直接透传。
         if attention_mask.dim() != 2:
@@ -102,11 +118,13 @@ class MiniLMModel(PreTrainedModel):
         key_length = past_seen_tokens + seq_len
         attention_mask = self._prepare_autoregressive_attention_mask(
             attention_mask=attention_mask,
+            input_ids=input_ids,
             batch_size=batch,
             query_length=seq_len,
             key_length=key_length,
             past_seen_tokens=past_seen_tokens,
             device=inputs_embeds.device,
+            pad_token_id=self.padding_idx,
         )
 
         hidden_states = inputs_embeds
