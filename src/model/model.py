@@ -38,14 +38,40 @@ class MiniLMModel(PreTrainedModel):
     @staticmethod
     def _prepare_autoregressive_attention_mask(
             attention_mask: torch.Tensor | None,
+            input_ids: torch.Tensor | None,
+            pad_token_id: int | None,
             batch_size: int,
             query_length: int,
             key_length: int,
             past_seen_tokens: int,
             device: torch.device,
     ) -> torch.Tensor | None:
+        query_positions = torch.arange(query_length, device=device) + past_seen_tokens
+        key_positions = torch.arange(key_length, device=device)
+        causal_mask = (key_positions.unsqueeze(0) <= query_positions.unsqueeze(1)).unsqueeze(0).unsqueeze(0)
+
         if attention_mask is None:
-            return None
+            if input_ids is None or pad_token_id is None:
+                return causal_mask.expand(batch_size, 1, query_length, key_length)
+
+            current_valid = input_ids.to(device=device).ne(pad_token_id)
+            if current_valid.shape != (batch_size, query_length):
+                raise ValueError(
+                    "input_ids shape mismatch while building the default causal mask: "
+                    f"got {tuple(current_valid.shape)}, expected {(batch_size, query_length)}"
+                )
+
+            if past_seen_tokens > 0:
+                past_valid = torch.ones(
+                    (batch_size, past_seen_tokens), dtype=torch.bool, device=device
+                )
+                key_valid = torch.cat([past_valid, current_valid], dim=1)
+            else:
+                key_valid = current_valid
+
+            query_valid = current_valid.unsqueeze(1).unsqueeze(-1)
+            key_valid = key_valid.unsqueeze(1).unsqueeze(1)
+            return causal_mask & query_valid & key_valid
 
         # 输入约定:
         # - 2D [batch, seq_len]：1/True 表示非 pad 可见，模型内部补齐 causal。
@@ -63,13 +89,16 @@ class MiniLMModel(PreTrainedModel):
                 f"attention_mask key length mismatch: got {attention_mask.size(1)}, expected {key_length}"
             )
 
-        key_padding_mask = attention_mask.to(device=device).bool().unsqueeze(1).unsqueeze(1)
+        valid_tokens = attention_mask.to(device=device).bool()
+        query_valid = valid_tokens[:, past_seen_tokens: past_seen_tokens + query_length]
+        if query_valid.size(1) != query_length:
+            raise ValueError(
+                f"attention_mask query slice mismatch: got {query_valid.size(1)}, expected {query_length}"
+            )
 
-        query_positions = torch.arange(query_length, device=device) + past_seen_tokens
-        key_positions = torch.arange(key_length, device=device)
-        causal_mask = (key_positions.unsqueeze(0) <= query_positions.unsqueeze(1)).unsqueeze(0).unsqueeze(0)
-
-        return key_padding_mask & causal_mask
+        key_padding_mask = valid_tokens.unsqueeze(1).unsqueeze(1)
+        query_padding_mask = query_valid.unsqueeze(1).unsqueeze(-1)
+        return key_padding_mask & query_padding_mask & causal_mask
 
     def forward(
             self,
@@ -102,6 +131,8 @@ class MiniLMModel(PreTrainedModel):
         key_length = past_seen_tokens + seq_len
         attention_mask = self._prepare_autoregressive_attention_mask(
             attention_mask=attention_mask,
+            input_ids=input_ids,
+            pad_token_id=self.padding_idx,
             batch_size=batch,
             query_length=seq_len,
             key_length=key_length,
