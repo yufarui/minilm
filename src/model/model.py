@@ -35,14 +35,15 @@ class MiniLMModel(PreTrainedModel):
 
         self.post_init()
 
-    @staticmethod
     def _prepare_autoregressive_attention_mask(
+            self,
             attention_mask: torch.Tensor | None,
             batch_size: int,
             query_length: int,
             key_length: int,
             past_seen_tokens: int,
             device: torch.device,
+            input_ids: torch.Tensor | None = None,
     ) -> torch.Tensor | None:
         # 输入约定:
         # - None：无 padding，模型内部仍需补齐 causal。
@@ -53,10 +54,15 @@ class MiniLMModel(PreTrainedModel):
         causal_mask = (key_positions.unsqueeze(0) <= query_positions.unsqueeze(1)).unsqueeze(0).unsqueeze(0)
 
         if attention_mask is None:
+            if input_ids is not None and past_seen_tokens == 0:
+                valid = input_ids.to(device=device).ne(self.padding_idx)
+                key_padding_mask = valid.unsqueeze(1).unsqueeze(1)
+                query_padding_mask = valid.unsqueeze(1).unsqueeze(3)
+                return key_padding_mask & query_padding_mask & causal_mask
             return causal_mask
 
         if attention_mask.dim() != 2:
-            attention_mask = attention_mask.to(device=device)
+            attention_mask = attention_mask.to(device=device).bool()
             if attention_mask.size(-1) < key_length:
                 raise ValueError(
                     f"attention_mask key length mismatch: got {attention_mask.size(-1)}, expected at least {key_length}"
@@ -81,9 +87,11 @@ class MiniLMModel(PreTrainedModel):
                 f"attention_mask key length mismatch: got {attention_mask.size(1)}, expected {key_length}"
             )
 
-        key_padding_mask = attention_mask.to(device=device).bool().unsqueeze(1).unsqueeze(1)
+        valid = attention_mask.to(device=device).bool()
+        key_padding_mask = valid.unsqueeze(1).unsqueeze(1)
+        query_padding_mask = valid[:, -query_length:].unsqueeze(1).unsqueeze(3)
 
-        return key_padding_mask & causal_mask
+        return key_padding_mask & query_padding_mask & causal_mask
 
     def forward(
             self,
@@ -121,6 +129,7 @@ class MiniLMModel(PreTrainedModel):
             key_length=key_length,
             past_seen_tokens=past_seen_tokens,
             device=inputs_embeds.device,
+            input_ids=input_ids,
         )
 
         hidden_states = inputs_embeds

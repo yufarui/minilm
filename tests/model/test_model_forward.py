@@ -30,8 +30,9 @@ def test_minilm_model_invalid_input_raises(tiny_config):
 @torch.no_grad()
 def test_causal_lm_without_attention_mask_matches_internal_causal_mask(tiny_config):
     model = MiniLmForCausalLM(tiny_config).eval()
-    input_ids = torch.randint(0, tiny_config.vocab_size, (2, 6))
-    explicit_padding_mask = torch.ones_like(input_ids)
+    input_ids = torch.randint(1, tiny_config.vocab_size, (2, 6))
+    input_ids[0, -2:] = tiny_config.pad_token_id
+    explicit_padding_mask = input_ids.ne(tiny_config.pad_token_id).long()
 
     implicit = model(input_ids=input_ids, use_cache=False).logits
     explicit = model(
