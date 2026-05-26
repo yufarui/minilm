@@ -14,6 +14,7 @@ from .dataset_test_utils import (
     SFT_TOOLS_STRING_JSONL,
     ensure_preprocess_tmp,
     load_local_tokenizer,
+    write_jsonl,
 )
 
 
@@ -101,6 +102,30 @@ def test_dpo_dataset_load_with_mock_jsonl() -> None:
     assert row["prompt"]
     assert row["chosen"]
     assert row["rejected"]
+
+
+def test_dpo_chat_prompt_includes_assistant_generation_header(tmp_path) -> None:
+    dpo_jsonl = tmp_path / "dpo.jsonl"
+    rows = [
+        {
+            "chosen": [
+                {"content": "请判断这条评论是褒义还是贬义。", "role": "user"},
+                {"content": "这是褒义评论。", "role": "assistant"},
+            ],
+            "rejected": [
+                {"content": "请判断这条评论是褒义还是贬义。", "role": "user"},
+                {"content": "坏", "role": "assistant"},
+            ],
+        }
+    ]
+    write_jsonl(dpo_jsonl, rows)
+
+    tok = load_local_tokenizer()
+    row = DPODataset(dpo_jsonl, tokenizer=tok).as_hf_dataset()[0]
+
+    assert row["prompt"].endswith("<|im_start|>assistant\n")
+    assert row["chosen"] == "这是褒义评论。"
+    assert row["rejected"] == "坏"
 
 
 def test_sft_dataset_loads_stringified_tools_and_tool_calls() -> None:
