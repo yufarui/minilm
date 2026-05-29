@@ -56,6 +56,8 @@ class MiniLMModel(PreTrainedModel):
 
         if attention_mask.dim() != 2:
             attention_mask = attention_mask.to(device=device)
+            if attention_mask.dim() == 3:
+                attention_mask = attention_mask.unsqueeze(1)
             if attention_mask.size(0) not in (1, batch_size):
                 raise ValueError(
                     f"attention_mask batch size mismatch: got {attention_mask.size(0)}, expected {batch_size}"
@@ -64,12 +66,16 @@ class MiniLMModel(PreTrainedModel):
                 raise ValueError(
                     f"attention_mask key length mismatch: got {attention_mask.size(-1)}, expected at least {key_length}"
                 )
-            if attention_mask.size(-2) < past_seen_tokens + query_length:
+            if attention_mask.size(-2) == query_length:
+                q_slice = slice(None)
+            elif attention_mask.size(-2) >= past_seen_tokens + query_length:
+                q_slice = slice(past_seen_tokens, past_seen_tokens + query_length)
+            else:
                 raise ValueError(
                     "attention_mask query length mismatch: "
-                    f"got {attention_mask.size(-2)}, expected at least {past_seen_tokens + query_length}"
+                    f"got {attention_mask.size(-2)}, expected {query_length} or at least "
+                    f"{past_seen_tokens + query_length}"
                 )
-            q_slice = slice(past_seen_tokens, past_seen_tokens + query_length)
             return attention_mask[..., q_slice, :key_length]
 
         if attention_mask.size(0) != batch_size:
