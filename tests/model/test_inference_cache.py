@@ -21,3 +21,23 @@ def test_incremental_decode_matches_full_logits_close(tiny_config):
     inc = step.logits[:, -1, :]
 
     assert torch.allclose(full, inc, atol=1e-4, rtol=1e-4)
+
+
+@torch.no_grad()
+def test_incremental_decode_accepts_full_4d_mask_reuse(tiny_config):
+    model = MiniLmForCausalLM(tiny_config).eval()
+    input_ids = torch.randint(0, tiny_config.vocab_size, (1, 6))
+    seqlen = input_ids.shape[1]
+    causal_mask = torch.tril(torch.ones(1, 1, seqlen, seqlen, dtype=torch.bool))
+
+    full = model(input_ids=input_ids, attention_mask=causal_mask, use_cache=False).logits[:, -1, :]
+
+    first = model(input_ids=input_ids[:, :5], attention_mask=causal_mask, use_cache=True)
+    step = model(
+        input_ids=input_ids[:, 5:],
+        attention_mask=causal_mask,
+        past_key_values=first.past_key_values,
+        use_cache=True,
+    )
+
+    assert torch.allclose(full, step.logits[:, -1, :], atol=1e-4, rtol=1e-4)

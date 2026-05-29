@@ -44,30 +44,57 @@ class MiniLMModel(PreTrainedModel):
             past_seen_tokens: int,
             device: torch.device,
     ) -> torch.Tensor | None:
-        if attention_mask is None:
-            return None
-
         # 输入约定:
         # - 2D [batch, seq_len]：1/True 表示非 pad 可见，模型内部补齐 causal。
-        # - 非 2D（如外部显式传入的 4D）：视为完整掩码，直接透传。
+        # - 非 2D（如外部显式传入的 4D）：视为完整掩码，但缓存解码时按当前 query/key 窗口裁剪。
+        query_positions = torch.arange(query_length, device=device) + past_seen_tokens
+        key_positions = torch.arange(key_length, device=device)
+        causal_mask = (key_positions.unsqueeze(0) <= query_positions.unsqueeze(1)).unsqueeze(0).unsqueeze(0)
+
+        if attention_mask is None:
+            return causal_mask.expand(batch_size, 1, query_length, key_length)
+
         if attention_mask.dim() != 2:
-            return attention_mask
+            attention_mask = attention_mask.to(device=device)
+            if attention_mask.size(0) not in (1, batch_size):
+                raise ValueError(
+                    f"attention_mask batch size mismatch: got {attention_mask.size(0)}, expected {batch_size}"
+                )
+            if attention_mask.size(-1) < key_length:
+                raise ValueError(
+                    f"attention_mask key length mismatch: got {attention_mask.size(-1)}, expected at least {key_length}"
+                )
+            if attention_mask.size(-2) < past_seen_tokens + query_length:
+                raise ValueError(
+                    "attention_mask query length mismatch: "
+                    f"got {attention_mask.size(-2)}, expected at least {past_seen_tokens + query_length}"
+                )
+            q_slice = slice(past_seen_tokens, past_seen_tokens + query_length)
+            return attention_mask[..., q_slice, :key_length]
 
         if attention_mask.size(0) != batch_size:
             raise ValueError(
                 f"attention_mask batch size mismatch: got {attention_mask.size(0)}, expected {batch_size}"
             )
 
-        if attention_mask.size(1) != key_length:
+        attention_mask = attention_mask.to(device=device).bool()
+        mask_length = attention_mask.size(1)
+        if mask_length > key_length:
+            attention_mask = attention_mask[:, :key_length]
+        elif mask_length == query_length and past_seen_tokens > 0:
+            prefix_mask = torch.ones(
+                batch_size,
+                past_seen_tokens,
+                dtype=torch.bool,
+                device=device,
+            )
+            attention_mask = torch.cat([prefix_mask, attention_mask], dim=1)
+        elif mask_length != key_length:
             raise ValueError(
-                f"attention_mask key length mismatch: got {attention_mask.size(1)}, expected {key_length}"
+                f"attention_mask key length mismatch: got {mask_length}, expected {key_length}"
             )
 
-        key_padding_mask = attention_mask.to(device=device).bool().unsqueeze(1).unsqueeze(1)
-
-        query_positions = torch.arange(query_length, device=device) + past_seen_tokens
-        key_positions = torch.arange(key_length, device=device)
-        causal_mask = (key_positions.unsqueeze(0) <= query_positions.unsqueeze(1)).unsqueeze(0).unsqueeze(0)
+        key_padding_mask = attention_mask.unsqueeze(1).unsqueeze(1)
 
         return key_padding_mask & causal_mask
 
