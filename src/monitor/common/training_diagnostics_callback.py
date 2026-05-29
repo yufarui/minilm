@@ -63,6 +63,13 @@ def _unwrap_model(model: torch.nn.Module) -> torch.nn.Module:
     return model.module if hasattr(model, "module") else model
 
 
+def _safe_dataset_len(dataset: Any) -> int | None:
+    try:
+        return len(dataset)
+    except TypeError:
+        return None
+
+
 def _next_token_top1_and_entropy(
     logits: torch.Tensor,
     labels: torch.Tensor,
@@ -171,10 +178,11 @@ class TrainingDiagnosticsCallback(TrainerCallback):
         from torch.utils.data import DataLoader
 
         ds = self.eval_dataset
-        if len(ds) == 0:
+        ds_len = _safe_dataset_len(ds)
+        if ds_len == 0:
             return
         collator = self.data_collator
-        batch_size = max(1, min(4, len(ds)))
+        batch_size = max(1, min(4, ds_len)) if ds_len is not None else 4
         dl = DataLoader(ds, batch_size=batch_size, shuffle=False, collate_fn=collator)
         device = next(model.parameters()).device
         m = _unwrap_model(model)
