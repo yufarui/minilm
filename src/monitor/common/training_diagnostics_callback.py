@@ -171,10 +171,8 @@ class TrainingDiagnosticsCallback(TrainerCallback):
         from torch.utils.data import DataLoader
 
         ds = self.eval_dataset
-        if len(ds) == 0:
-            return
         collator = self.data_collator
-        batch_size = max(1, min(4, len(ds)))
+        batch_size = self._probe_batch_size(ds)
         dl = DataLoader(ds, batch_size=batch_size, shuffle=False, collate_fn=collator)
         device = next(model.parameters()).device
         m = _unwrap_model(model)
@@ -204,6 +202,16 @@ class TrainingDiagnosticsCallback(TrainerCallback):
         if ent_list:
             logs["diag/eval_entropy"] = sum(ent_list) / len(ent_list)
         self._swanlab_log({"diag/eval_top1": logs.get("diag/eval_top1"), "diag/eval_entropy": logs.get("diag/eval_entropy")}, step)
+
+    @staticmethod
+    def _probe_batch_size(dataset: Any) -> int:
+        try:
+            dataset_len = len(dataset)
+        except TypeError:
+            return 4
+        if dataset_len <= 0:
+            return 1
+        return max(1, min(4, dataset_len))
 
     def _run_generation(self, model: torch.nn.Module, step: int) -> None:
         m = _unwrap_model(model)
