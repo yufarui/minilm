@@ -94,7 +94,7 @@ class DPODataset:
         prompt = tokenizer.apply_chat_template(
             prefix_c,
             tokenize=False,
-            add_generation_prompt=False,
+            add_generation_prompt=True,
             tools=tools,
             open_think=False,
         )
