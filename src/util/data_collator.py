@@ -123,21 +123,17 @@ class TrainDataCollator:
         seq_len = input_ids.shape[0]
 
         current_pos = 0
-        in_segment = False
 
         for t in range(seq_len):
-            if input_ids[t] == self.pack_sep_token_id:
-                position_ids[t] = 0
-                current_pos = 0
-                in_segment = False
             if input_ids[t] == self.pad_token_id:
                 # 最后的动态填充区，会出现pad
                 position_ids[t] = 0
+                continue
+
+            position_ids[t] = current_pos
+            if input_ids[t] == self.pack_sep_token_id:
+                current_pos = 0
             else:
-                if not in_segment:
-                    in_segment = True
-                    current_pos = 0
-                position_ids[t] = current_pos
                 current_pos += 1
 
         return position_ids
