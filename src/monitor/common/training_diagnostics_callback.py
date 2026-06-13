@@ -171,10 +171,14 @@ class TrainingDiagnosticsCallback(TrainerCallback):
         from torch.utils.data import DataLoader
 
         ds = self.eval_dataset
-        if len(ds) == 0:
+        try:
+            ds_len = len(ds)
+        except (TypeError, NotImplementedError):
+            ds_len = None
+        if ds_len == 0:
             return
         collator = self.data_collator
-        batch_size = max(1, min(4, len(ds)))
+        batch_size = max(1, min(4, ds_len)) if ds_len is not None else 4
         dl = DataLoader(ds, batch_size=batch_size, shuffle=False, collate_fn=collator)
         device = next(model.parameters()).device
         m = _unwrap_model(model)
