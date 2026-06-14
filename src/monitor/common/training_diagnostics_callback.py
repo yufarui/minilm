@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import json
 import logging
+from collections.abc import Sized
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -171,10 +172,13 @@ class TrainingDiagnosticsCallback(TrainerCallback):
         from torch.utils.data import DataLoader
 
         ds = self.eval_dataset
-        if len(ds) == 0:
-            return
+        batch_size = 4
+        if isinstance(ds, Sized):
+            ds_len = len(ds)
+            if ds_len == 0:
+                return
+            batch_size = max(1, min(4, ds_len))
         collator = self.data_collator
-        batch_size = max(1, min(4, len(ds)))
         dl = DataLoader(ds, batch_size=batch_size, shuffle=False, collate_fn=collator)
         device = next(model.parameters()).device
         m = _unwrap_model(model)

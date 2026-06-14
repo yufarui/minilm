@@ -99,6 +99,7 @@ def test_dpo_dataset_load_with_mock_jsonl() -> None:
     assert len(ds) == 10
     row = ds[0]
     assert row["prompt"]
+    assert row["prompt"].endswith("<|im_start|>assistant\n")
     assert row["chosen"]
     assert row["rejected"]
 
