@@ -1,7 +1,7 @@
 # SFT 对话 JSONL：每行含 conversations（OpenAI 风格 role/content，可选 tool_calls）
 kind: sft
 input: data/sft/sft_t2t_mini.jsonl
-output: data/sft/sft_clean.jsonl
+output: data/sft/sft_train.jsonl
 stats_path: data/sft/sft_clean_stats.json
 write_plots: false
 
