@@ -1,6 +1,7 @@
 import json
 from pathlib import Path
 
+from src.preprocess.job_config import PreprocessJobFile
 from src.preprocess.strategies.pipeline import PreprocessPipeline, PreprocessPipelineConfig
 from src.preprocess.strategies.sft_pipeline import SftPipelineConfig, SftPreprocessPipeline
 
@@ -23,6 +24,13 @@ def _test_case_dir(case_name: str) -> Path:
     case_dir = TEST_TMP_DIR / case_name
     case_dir.mkdir(parents=True, exist_ok=True)
     return case_dir
+
+
+def test_default_sft_preprocess_output_matches_sft_training_config():
+    preprocess_job = PreprocessJobFile.load("config/preprocess/sft.pipeline.job.yaml")
+    data_config = json.loads(Path("config/sft/data_config.json").read_text(encoding="utf-8"))
+
+    assert preprocess_job.output_path == data_config["train_data_path"]
 
 
 def test_pretrain_pipeline_with_100_synthetic_rows():
