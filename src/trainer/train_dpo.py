@@ -4,6 +4,7 @@ import logging
 import sys
 
 from transformers import TrainingArguments
+from transformers.trainer_utils import IntervalStrategy
 from trl import DPOConfig, DPOTrainer
 
 from src.config.data_arguments import DpoDataArguments
@@ -52,6 +53,12 @@ def run_dpo(training_args: TrainingArguments, data_args: DpoDataArguments) -> No
         dpo_args.max_prompt_length = int(data_args.max_prompt_length)
     if hasattr(dpo_args, "truncation_mode"):
         dpo_args.truncation_mode = data_args.truncation_mode
+    if eval_dataset is None and dpo_args.do_eval:
+        dpo_args.do_eval = False
+        if hasattr(dpo_args, "eval_strategy"):
+            dpo_args.eval_strategy = IntervalStrategy.NO
+        if hasattr(dpo_args, "evaluation_strategy"):
+            dpo_args.evaluation_strategy = IntervalStrategy.NO
 
     trainer = DPOTrainer(
         model=model,
