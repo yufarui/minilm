@@ -44,8 +44,12 @@ class MiniLMModel(PreTrainedModel):
             past_seen_tokens: int,
             device: torch.device,
     ) -> torch.Tensor | None:
+        query_positions = torch.arange(query_length, device=device) + past_seen_tokens
+        key_positions = torch.arange(key_length, device=device)
+        causal_mask = (key_positions.unsqueeze(0) <= query_positions.unsqueeze(1)).unsqueeze(0).unsqueeze(0)
+
         if attention_mask is None:
-            return None
+            return causal_mask.expand(batch_size, -1, -1, -1)
 
         # 输入约定:
         # - 2D [batch, seq_len]：1/True 表示非 pad 可见，模型内部补齐 causal。
@@ -63,13 +67,16 @@ class MiniLMModel(PreTrainedModel):
                 f"attention_mask key length mismatch: got {attention_mask.size(1)}, expected {key_length}"
             )
 
-        key_padding_mask = attention_mask.to(device=device).bool().unsqueeze(1).unsqueeze(1)
+        padding_mask = attention_mask.to(device=device).bool()
+        key_padding_mask = padding_mask.unsqueeze(1).unsqueeze(1)
+        query_padding_mask = padding_mask[:, past_seen_tokens: past_seen_tokens + query_length]
+        if query_padding_mask.size(1) != query_length:
+            raise ValueError(
+                f"attention_mask query length mismatch: got {query_padding_mask.size(1)}, expected {query_length}"
+            )
+        query_padding_mask = query_padding_mask.unsqueeze(1).unsqueeze(-1)
 
-        query_positions = torch.arange(query_length, device=device) + past_seen_tokens
-        key_positions = torch.arange(key_length, device=device)
-        causal_mask = (key_positions.unsqueeze(0) <= query_positions.unsqueeze(1)).unsqueeze(0).unsqueeze(0)
-
-        return key_padding_mask & causal_mask
+        return key_padding_mask & query_padding_mask & causal_mask
 
     def forward(
             self,
