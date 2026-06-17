@@ -18,3 +18,16 @@ def test_causal_lm_train_returns_loss(tiny_config):
     out = model(input_ids=input_ids, labels=labels, use_cache=False)
     assert out.loss is not None
     assert torch.isfinite(out.loss)
+
+
+@torch.no_grad()
+def test_causal_lm_default_attention_is_causal(tiny_config):
+    model = MiniLmForCausalLM(tiny_config).eval()
+    input_ids = torch.tensor([[11, 12, 13, 14, 15]], dtype=torch.long)
+    changed_future = input_ids.clone()
+    changed_future[0, -1] = 16
+
+    base_logits = model(input_ids=input_ids, use_cache=False).logits[:, :-1, :]
+    changed_logits = model(input_ids=changed_future, use_cache=False).logits[:, :-1, :]
+
+    assert torch.allclose(base_logits, changed_logits, atol=1e-6, rtol=1e-6)
