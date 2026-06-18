@@ -38,13 +38,20 @@ def run_dpo(training_args: TrainingArguments, data_args: DpoDataArguments) -> No
     train_data_path = resolve_under_project(data_args.train_data_path)
     train_dataset = DPODataset(train_data_path, tokenizer=tokenizer).as_hf_dataset()
     eval_dataset = None
+    skip_eval_without_dataset = training_args.do_eval and not data_args.eval_data_path
     if training_args.do_eval and data_args.eval_data_path:
         eval_data_path = resolve_under_project(data_args.eval_data_path)
         eval_dataset = DPODataset(eval_data_path, tokenizer=tokenizer).as_hf_dataset()
-    elif training_args.do_eval and not data_args.eval_data_path:
+    elif skip_eval_without_dataset:
         logger.warning("do_eval=True 但未提供 eval_data_path，将跳过验证。")
 
     dpo_args = DPOConfig(**training_args.to_dict())
+    if skip_eval_without_dataset:
+        dpo_args.do_eval = False
+        if hasattr(dpo_args, "eval_strategy"):
+            dpo_args.eval_strategy = "no"
+        if hasattr(dpo_args, "evaluation_strategy"):
+            dpo_args.evaluation_strategy = "no"
     dpo_args.beta = float(data_args.dpo_beta)
     if hasattr(dpo_args, "max_length"):
         dpo_args.max_length = int(data_args.max_seq_length)

@@ -10,10 +10,10 @@ logger = logging.getLogger(__name__)
 
 class TrainDataCollator:
 
-    """预训练 / SFT 共用：动态 padding + 分段因果掩码。
+    """预训练 / SFT 共用：动态 padding + packing 段隔离。
 
-    - 预训练：``labels`` 与 ``input_ids`` 一致，全程参与 loss；attention_mask 为 4D 分段因果掩码。
-    - SFT：保留数据侧 ``labels=-100`` 的监督选择逻辑；attention_mask 在每个 ``<|endoftext|>`` 分段内独立计算。
+    - 预训练：``labels`` 与 ``input_ids`` 一致，全程参与 loss → 标准因果掩码 + packing 隔断。
+    - SFT：仅部分位置 ``labels != ignore_index`` → 段内前缀全互见 + 监督段因果。
     - RoPE：在 **pack 分隔符**（默认 ``<|endoftext|>``）处将位置计数归零，
       使各文档段内为 0,1,2,…；batch 右侧对齐填充的 ``position_ids`` 为 0（与掩码一致）。
     """
@@ -74,7 +74,7 @@ class TrainDataCollator:
                 padded_lab = lab
                 padded_pos = pos_ids
 
-            attn_mask = self._make_attn_mask(padded_ids)
+            attn_mask = self._make_attn_mask(padded_ids, padded_lab)
 
             batch_input_ids.append(padded_ids)
             batch_labels.append(padded_lab)
@@ -88,13 +88,14 @@ class TrainDataCollator:
             "attention_mask": torch.stack(attention_masks),
         }
 
-    def _make_attn_mask(self, input_ids: torch.Tensor) -> torch.Tensor:
+    def _make_attn_mask(self, input_ids: torch.Tensor, labels: torch.Tensor) -> torch.Tensor:
         # 4D 掩码: [1, q_len, k_len]
         # 1) pad query/key 全屏蔽
-        # 2) 因果可见（j <= i）
-        # 3) 仅同一 pack 分段（由 <|endoftext|> 切分）内可见
+        # 2) 仅同一 pack 分段（由 <|endoftext|> 切分）内可见
+        # 3) 预训练为段内因果；SFT 的 labels=-100 前缀块在段内全互见
         seq_len = input_ids.shape[0]
         device = input_ids.device
+        labels = labels.to(device=device)
 
         non_pad = (input_ids != self.pad_token_id)
         segment_ids = torch.full((seq_len,), -1, dtype=torch.long, device=device)
@@ -114,7 +115,60 @@ class TrainDataCollator:
         valid_key = non_pad.unsqueeze(0)
 
         attn_mask = same_segment & causal & valid_query & valid_key
+        self._apply_prefix_visibility(attn_mask, input_ids, labels, segment_ids)
         return attn_mask.unsqueeze(0)
+
+    def _apply_prefix_visibility(
+        self,
+        attn_mask: torch.Tensor,
+        input_ids: torch.Tensor,
+        labels: torch.Tensor,
+        segment_ids: torch.Tensor,
+    ) -> None:
+        seq_len = input_ids.shape[0]
+        pos = 0
+
+        while pos < seq_len:
+            segment_id = int(segment_ids[pos].item())
+            if segment_id < 0:
+                pos += 1
+                continue
+
+            segment_start = pos
+            while pos < seq_len and int(segment_ids[pos].item()) == segment_id:
+                pos += 1
+            segment_end = pos
+
+            block_start = segment_start
+            while block_start < segment_end:
+                if not self._is_prefix_token(input_ids[block_start], labels[block_start]):
+                    block_start += 1
+                    continue
+
+                prefix_start = block_start
+                prefix_end = prefix_start + 1
+                while (
+                    prefix_end < segment_end
+                    and self._is_prefix_token(input_ids[prefix_end], labels[prefix_end])
+                ):
+                    prefix_end += 1
+
+                next_block_end = prefix_end
+                while (
+                    next_block_end < segment_end
+                    and not self._is_prefix_token(input_ids[next_block_end], labels[next_block_end])
+                ):
+                    next_block_end += 1
+
+                attn_mask[prefix_start:next_block_end, segment_start:prefix_end] = True
+                block_start = prefix_end
+
+    def _is_prefix_token(self, token_id: torch.Tensor, label: torch.Tensor) -> bool:
+        return (
+            int(label.item()) == self.ignore_index
+            and int(token_id.item()) != self.pack_sep_token_id
+            and int(token_id.item()) != self.pad_token_id
+        )
 
     def _packed_position_ids_1d(self, input_ids: torch.Tensor) -> torch.Tensor:
 
