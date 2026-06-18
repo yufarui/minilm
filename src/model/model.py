@@ -43,9 +43,13 @@ class MiniLMModel(PreTrainedModel):
             key_length: int,
             past_seen_tokens: int,
             device: torch.device,
-    ) -> torch.Tensor | None:
+    ) -> torch.Tensor:
+        query_positions = torch.arange(query_length, device=device) + past_seen_tokens
+        key_positions = torch.arange(key_length, device=device)
+        causal_mask = (key_positions.unsqueeze(0) <= query_positions.unsqueeze(1)).unsqueeze(0).unsqueeze(0)
+
         if attention_mask is None:
-            return None
+            return causal_mask.expand(batch_size, 1, query_length, key_length)
 
         # 输入约定:
         # - 2D [batch, seq_len]：1/True 表示非 pad 可见，模型内部补齐 causal。
@@ -64,10 +68,6 @@ class MiniLMModel(PreTrainedModel):
             )
 
         key_padding_mask = attention_mask.to(device=device).bool().unsqueeze(1).unsqueeze(1)
-
-        query_positions = torch.arange(query_length, device=device) + past_seen_tokens
-        key_positions = torch.arange(key_length, device=device)
-        causal_mask = (key_positions.unsqueeze(0) <= query_positions.unsqueeze(1)).unsqueeze(0).unsqueeze(0)
 
         return key_padding_mask & causal_mask
 
