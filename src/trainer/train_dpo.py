@@ -44,7 +44,15 @@ def run_dpo(training_args: TrainingArguments, data_args: DpoDataArguments) -> No
     elif training_args.do_eval and not data_args.eval_data_path:
         logger.warning("do_eval=True 但未提供 eval_data_path，将跳过验证。")
 
-    dpo_args = DPOConfig(**training_args.to_dict())
+    dpo_args_dict = training_args.to_dict()
+    if eval_dataset is None:
+        dpo_args_dict["do_eval"] = False
+        if "eval_strategy" in dpo_args_dict:
+            dpo_args_dict["eval_strategy"] = "no"
+        if "evaluation_strategy" in dpo_args_dict:
+            dpo_args_dict["evaluation_strategy"] = "no"
+
+    dpo_args = DPOConfig(**dpo_args_dict)
     dpo_args.beta = float(data_args.dpo_beta)
     if hasattr(dpo_args, "max_length"):
         dpo_args.max_length = int(data_args.max_seq_length)
