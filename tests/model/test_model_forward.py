@@ -3,6 +3,33 @@ import torch
 
 from src.model.model import MiniLMModel
 
+
+def test_minilm_model_builds_causal_mask_when_attention_mask_is_omitted():
+    mask = MiniLMModel._prepare_autoregressive_attention_mask(
+        attention_mask=None,
+        batch_size=2,
+        query_length=4,
+        key_length=4,
+        past_seen_tokens=0,
+        device=torch.device("cpu"),
+    )
+    expected = torch.tril(torch.ones(4, 4, dtype=torch.bool)).unsqueeze(0).unsqueeze(0)
+    assert torch.equal(mask, expected)
+
+
+def test_minilm_model_builds_incremental_causal_mask_without_attention_mask():
+    mask = MiniLMModel._prepare_autoregressive_attention_mask(
+        attention_mask=None,
+        batch_size=2,
+        query_length=1,
+        key_length=5,
+        past_seen_tokens=4,
+        device=torch.device("cpu"),
+    )
+    expected = torch.ones(1, 1, 1, 5, dtype=torch.bool)
+    assert torch.equal(mask, expected)
+
+
 def test_minilm_model_forward_shape_and_cache(tiny_config):
     model = MiniLMModel(tiny_config).eval()
     input_ids = torch.randint(0, tiny_config.vocab_size, (2, 6))
