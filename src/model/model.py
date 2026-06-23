@@ -43,15 +43,20 @@ class MiniLMModel(PreTrainedModel):
             key_length: int,
             past_seen_tokens: int,
             device: torch.device,
-    ) -> torch.Tensor | None:
-        if attention_mask is None:
-            return None
-
+    ) -> torch.Tensor:
         # 输入约定:
+        # - None：无 padding，但仍必须补齐 causal，避免自回归路径看到未来 token。
         # - 2D [batch, seq_len]：1/True 表示非 pad 可见，模型内部补齐 causal。
         # - 非 2D（如外部显式传入的 4D）：视为完整掩码，直接透传。
-        if attention_mask.dim() != 2:
+        if attention_mask is not None and attention_mask.dim() != 2:
             return attention_mask
+
+        query_positions = torch.arange(query_length, device=device) + past_seen_tokens
+        key_positions = torch.arange(key_length, device=device)
+        causal_mask = (key_positions.unsqueeze(0) <= query_positions.unsqueeze(1)).unsqueeze(0).unsqueeze(0)
+
+        if attention_mask is None:
+            return causal_mask
 
         if attention_mask.size(0) != batch_size:
             raise ValueError(
@@ -64,10 +69,6 @@ class MiniLMModel(PreTrainedModel):
             )
 
         key_padding_mask = attention_mask.to(device=device).bool().unsqueeze(1).unsqueeze(1)
-
-        query_positions = torch.arange(query_length, device=device) + past_seen_tokens
-        key_positions = torch.arange(key_length, device=device)
-        causal_mask = (key_positions.unsqueeze(0) <= query_positions.unsqueeze(1)).unsqueeze(0).unsqueeze(0)
 
         return key_padding_mask & causal_mask
 
