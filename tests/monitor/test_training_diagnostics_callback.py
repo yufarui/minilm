@@ -22,8 +22,7 @@ class _TinyModel(torch.nn.Module):
 
     def forward(self, input_ids, labels=None, **_kwargs):
         logits = torch.zeros((*input_ids.shape, 8), device=input_ids.device)
-        logits[:, :-1, 2] = 1.0
-        logits[:, -1, 3] = 1.0
+        logits[:, :-1, :].scatter_(2, input_ids[:, 1:].unsqueeze(-1), 1.0)
         return SimpleNamespace(logits=logits)
 
 
