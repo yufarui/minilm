@@ -147,6 +147,22 @@ class PreTrainDataset(IterableDataset):
         self, shard_id: int, num_shards: int, parquet_files: list[Path]
     ) -> Iterator[list[int]]:
         """按文件分配给 shard，尽量避免多个 worker 竞争同一 parquet 文件。"""
+        if num_shards > len(parquet_files):
+            logger.warning(
+                "Parquet shard count (%s) is smaller than data shards (%s); falling back to row-level sharding.",
+                len(parquet_files),
+                num_shards,
+            )
+            global_idx = 0
+            for file_path in parquet_files:
+                pf = pq.ParquetFile(str(file_path))
+                for batch in pf.iter_batches(columns=["input_ids"], batch_size=2048):
+                    for ids in batch.column(0).to_pylist():
+                        if global_idx % num_shards == shard_id and ids:
+                            yield list(ids)
+                        global_idx += 1
+            return
+
         my_files = [f for i, f in enumerate(parquet_files) if i % num_shards == shard_id]
         for file_path in my_files:
             pf = pq.ParquetFile(str(file_path))

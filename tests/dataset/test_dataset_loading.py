@@ -2,6 +2,9 @@ import json
 import pytest
 from itertools import islice
 
+import pyarrow as pa
+import pyarrow.parquet as pq
+
 from src.dataset.dpo_dataset import DPODataset
 from src.dataset.pre_train_dataset import PreTrainDataset
 from src.dataset.sft_dataset import SFTDataset
@@ -54,6 +57,25 @@ def test_pretrain_dataset_pack_bin_schedule() -> None:
 
     # 后续阶段块长为 16，最后一条允许短于 16。
     assert 0 < first_three[2]["input_ids"].shape[0] <= 16
+
+
+def test_pretrain_parquet_directory_row_shards_when_more_workers_than_files(tmp_path) -> None:
+    tok = load_local_tokenizer()
+    parquet_dir = tmp_path / "pretrain_arrow"
+    parquet_dir.mkdir()
+    rows = [[i, i + 100] for i in range(8)]
+    table = pa.Table.from_arrays(
+        [pa.array(rows, type=pa.list_(pa.int32()))],
+        names=["input_ids"],
+    )
+    pq.write_table(table, parquet_dir / "part-00000.parquet")
+
+    ds = PreTrainDataset(parquet_dir, tok, pack_bin_size=64)
+    parquet_files = sorted(parquet_dir.glob("*.parquet"))
+    per_shard = [list(ds._iter_token_ids_parquet_shards(i, 4, parquet_files)) for i in range(4)]
+
+    assert [len(items) for items in per_shard] == [2, 2, 2, 2]
+    assert sorted(tuple(ids) for shard in per_shard for ids in shard) == sorted(tuple(row) for row in rows)
 
 
 def test_sft_dataset_load_from_preprocess_tmp() -> None:
