@@ -171,10 +171,15 @@ class TrainingDiagnosticsCallback(TrainerCallback):
         from torch.utils.data import DataLoader
 
         ds = self.eval_dataset
-        if len(ds) == 0:
+        try:
+            dataset_length = len(ds)
+        except TypeError:
+            # Streaming evaluation datasets intentionally do not implement __len__.
+            dataset_length = None
+        if dataset_length == 0:
             return
         collator = self.data_collator
-        batch_size = max(1, min(4, len(ds)))
+        batch_size = 4 if dataset_length is None else max(1, min(4, dataset_length))
         dl = DataLoader(ds, batch_size=batch_size, shuffle=False, collate_fn=collator)
         device = next(model.parameters()).device
         m = _unwrap_model(model)
