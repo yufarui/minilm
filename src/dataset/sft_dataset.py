@@ -199,10 +199,6 @@ class SFTDataset(IterableDataset):
         if hasattr(offsets, "tolist"):
             offsets = offsets.tolist()
         labels = self._labels_from_template_offsets(text, input_ids, offsets)
-        # 抽样检查正确性
-        r = random.random()
-        if r < 0.1:
-            logger.info(f"text\n:{text},")
         return input_ids, labels
 
     def _labels_from_template_offsets(
