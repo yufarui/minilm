@@ -1,4 +1,5 @@
 import json
+import logging
 import pytest
 from itertools import islice
 
@@ -114,3 +115,23 @@ def test_sft_dataset_loads_stringified_tools_and_tool_calls() -> None:
     # tools/tool_calls 为字符串 JSON 时也应可被解析并编码进模板文本。
     assert ("random_number" in text) or ("get_exchange_rate" in text)
     assert "69" in text
+
+
+def test_sft_dataset_does_not_log_conversation_contents(caplog, monkeypatch) -> None:
+    tok = load_local_tokenizer()
+    ds = SFTDataset(SFT_JSONL, tok, pack_bin_size=128)
+    secret = "private-training-data-7d51f86c"
+    conversations = [
+        {"role": "system", "content": "You are a helpful assistant."},
+        {"role": "user", "content": secret},
+        {"role": "assistant", "content": "Acknowledged."},
+    ]
+
+    # Before the regression fix, this value forced the 10% sampling branch
+    # that wrote the complete rendered conversation at INFO level.
+    monkeypatch.setattr("src.dataset.sft_dataset.random.random", lambda: 0.0)
+    with caplog.at_level(logging.INFO, logger="src.dataset.sft_dataset"):
+        encoded = ds._encode_conversation(conversations)
+
+    assert encoded is not None
+    assert secret not in caplog.text
