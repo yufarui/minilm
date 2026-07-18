@@ -56,6 +56,33 @@ def test_pretrain_dataset_pack_bin_schedule() -> None:
     assert 0 < first_three[2]["input_ids"].shape[0] <= 16
 
 
+@pytest.mark.parametrize("shard_id", [0, 1])
+def test_pretrain_pack_schedule_uses_global_sample_count(shard_id: int) -> None:
+    tok = load_local_tokenizer()
+    if not PRETRAIN_SCHEDULE_JSONL.exists():
+        pytest.fail(
+            "缺少 pack_bin_schedule 测试数据，请先运行 "
+            "`pytest tests/dataset/test_dataset_data_building.py`"
+        )
+
+    ds = PreTrainDataset(
+        PRETRAIN_SCHEDULE_JSONL,
+        tok,
+        pack_bin_size=64,
+        pack_bin_schedule=[
+            {"until_index": 2, "pack_bin_size": 8},
+            {"pack_bin_size": 16},
+        ],
+    )
+    ds._shard_info = lambda: (shard_id, 2)  # type: ignore[method-assign]
+
+    first_two = list(islice(iter(ds), 2))
+
+    # The first two logical samples are split between the two shards. Each
+    # shard must therefore advance after one local sample, not two.
+    assert [item["input_ids"].shape[0] for item in first_two] == [8, 16]
+
+
 def test_sft_dataset_load_from_preprocess_tmp() -> None:
     ensure_preprocess_tmp()
     tok = load_local_tokenizer()
