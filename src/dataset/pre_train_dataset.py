@@ -189,7 +189,11 @@ class PreTrainDataset(IterableDataset):
             nonlocal stage_idx
             while stage_idx < len(self._stages) - 1:
                 until_excl, _sz = self._stages[stage_idx]
-                if until_excl is None or emitted < until_excl:
+                # ``until_index`` is a global packed-sample boundary. Each
+                # iterator owns every ``num_shards``-th logical sample, so a
+                # shard's next sample has this global index.
+                next_global_index = emitted * num_shards + shard_id
+                if until_excl is None or next_global_index < until_excl:
                     break
                 stage_idx += 1
 
