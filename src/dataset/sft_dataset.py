@@ -4,7 +4,6 @@ import copy
 import json
 import logging
 import random
-import re
 from pathlib import Path
 from typing import Any, Dict, Iterator, List
 
@@ -49,11 +48,7 @@ class SFTDataset(IterableDataset):
         self.jsonl_path = str(jsonl_path)
 
         self.add_system_ratio = 0.2
-        eos = getattr(tokenizer, "eos_token", None) or "<|im_end|>"
-        self._assistant_block = re.compile(
-            rf"<\|im_start\|>assistant\n(.*?){re.escape(eos)}",
-            re.DOTALL,
-        )
+        self.eos_token = getattr(tokenizer, "eos_token", None) or "<|im_end|>"
 
         logger.info(
             "SFTDataset(one-row-one-sample, no pack/truncate): path=%s max_seq_len=%s",
@@ -198,27 +193,80 @@ class SFTDataset(IterableDataset):
         offsets = enc["offset_mapping"]
         if hasattr(offsets, "tolist"):
             offsets = offsets.tolist()
-        labels = self._labels_from_template_offsets(text, input_ids, offsets)
+        assistant_spans = self._assistant_spans_from_template(conv, tools, text)
+        if assistant_spans is None:
+            return None
+        labels = self._labels_from_template_offsets(input_ids, offsets, assistant_spans)
         # 抽样检查正确性
         r = random.random()
         if r < 0.1:
             logger.info(f"text\n:{text},")
         return input_ids, labels
 
-    def _labels_from_template_offsets(
+    def _assistant_spans_from_template(
         self,
-        text: str,
+        conversations: List[Dict[str, Any]],
+        tools: list[Any] | None,
+        full_text: str,
+    ) -> list[tuple[int, int]] | None:
+        """从结构化消息推导 assistant 正文（含 eos）在模板文本中的区间。"""
+        spans: list[tuple[int, int]] = []
+        assistant_header = "<|im_start|>assistant\n"
+
+        for index, message in enumerate(conversations):
+            if message.get("role") != "assistant":
+                continue
+
+            if index == 0:
+                before = ""
+            else:
+                before = self.tokenizer.apply_chat_template(
+                    conversations[:index],
+                    tokenize=False,
+                    add_generation_prompt=False,
+                    tools=tools,
+                    open_think=False,
+                )
+            through = (
+                full_text
+                if index == len(conversations) - 1
+                else self.tokenizer.apply_chat_template(
+                    conversations[: index + 1],
+                    tokenize=False,
+                    add_generation_prompt=False,
+                    tools=tools,
+                    open_think=False,
+                )
+            )
+            if not isinstance(before, str) or not isinstance(through, str):
+                logger.warning("apply_chat_template 前缀渲染未返回 str，跳过该条")
+                return None
+
+            expected_prefix = before + assistant_header
+            if not through.startswith(expected_prefix) or not full_text.startswith(through):
+                logger.warning("chat template 前缀不稳定，无法安全定位 assistant 监督区间，跳过该条")
+                return None
+
+            eos_start = through.rfind(self.eos_token, len(expected_prefix))
+            if eos_start < len(expected_prefix):
+                logger.warning("assistant 模板段缺少 eos，跳过该条")
+                return None
+            spans.append((len(expected_prefix), eos_start + len(self.eos_token)))
+
+        return spans
+
+    @staticmethod
+    def _labels_from_template_offsets(
         input_ids: list[int],
         offset_mapping: list[tuple[int, int]],
+        assistant_spans: list[tuple[int, int]],
     ) -> list[int]:
-        """按 chat 模板字符串中的 assistant 段（含多轮）映射到 token。
+        """将结构化消息推导出的 assistant 字符区间映射到 token。
 
         监督区间含本轮结束的 eos（如 ``<|im_end|>``），使模型学习在何处停止。
         """
         labels = [-100] * len(input_ids)
-        for m in self._assistant_block.finditer(text):
-            # group(1)=正文；end(0) 含 eos，与「预测到结束符再停」一致
-            c0, c1 = m.start(1), m.end(0)
+        for c0, c1 in assistant_spans:
             for ti, (a, b) in enumerate(offset_mapping):
                 if a >= c1 or b <= c0:
                     continue
