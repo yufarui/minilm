@@ -150,11 +150,8 @@ class PreTrainDataset(IterableDataset):
         my_files = [f for i, f in enumerate(parquet_files) if i % num_shards == shard_id]
         for file_path in my_files:
             pf = pq.ParquetFile(str(file_path))
-            table = pf.read(columns=["input_ids"])
-            ids_array = table.column("input_ids")
-            for chunk in ids_array.chunks:
-                for i in range(len(chunk)):
-                    ids = chunk[i].as_py()
+            for batch in pf.iter_batches(columns=["input_ids"], batch_size=2048):
+                for ids in batch.column(0).to_pylist():
                     if ids:
                         yield list(ids)
 
