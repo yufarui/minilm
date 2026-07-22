@@ -128,6 +128,11 @@ def build_arrow_dataset(
             tokenized_rows = []
             file_index += 1
 
+    current_shards = {f"part-{idx:05d}.parquet" for idx in range(file_index)}
+    for old_shard in out_dir.glob("part-*.parquet"):
+        if old_shard.name not in current_shards:
+            old_shard.unlink()
+
     info = {
         "builder_name": "streaming_parquet_shards",
         "config_name": "default",
