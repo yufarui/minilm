@@ -8,7 +8,6 @@ from pathlib import Path
 from typing import Any
 
 import torch
-import torch.distributed as dist
 from datasets import load_from_disk
 import pyarrow.parquet as pq
 from torch.utils.data import IterableDataset, get_worker_info
@@ -160,20 +159,11 @@ class PreTrainDataset(IterableDataset):
 
     @staticmethod
     def _shard_info() -> tuple[int, int]:
-        """返回 (shard_id, num_shards)，同时切分 DDP rank 与 dataloader workers。"""
+        """返回 DataLoader worker 分片；跨进程分片由 Accelerate dispatcher 负责。"""
         worker = get_worker_info()
         worker_id = worker.id if worker is not None else 0
         num_workers = worker.num_workers if worker is not None else 1
-
-        rank = 0
-        world_size = 1
-        if dist.is_available() and dist.is_initialized():
-            rank = dist.get_rank()
-            world_size = dist.get_world_size()
-
-        shard_id = rank * num_workers + worker_id
-        num_shards = world_size * num_workers
-        return shard_id, max(1, num_shards)
+        return worker_id, max(1, num_workers)
 
     def __iter__(self) -> Iterator[dict[str, torch.Tensor]]:
         shard_id, num_shards = self._shard_info()
