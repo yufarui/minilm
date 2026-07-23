@@ -5,6 +5,7 @@
   "data_seed": 42,
   "ignore_data_skip": false,
   "accelerator_config": {
+    "dispatch_batches": true,
     "use_seedable_sampler": true
   },
   "do_train": true,

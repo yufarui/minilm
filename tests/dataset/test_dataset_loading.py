@@ -1,7 +1,12 @@
 import json
 import pytest
 from itertools import islice
+from pathlib import Path
+from types import SimpleNamespace
 
+import torch.distributed as dist
+
+import src.dataset.pre_train_dataset as pre_train_dataset
 from src.dataset.dpo_dataset import DPODataset
 from src.dataset.pre_train_dataset import PreTrainDataset
 from src.dataset.sft_dataset import SFTDataset
@@ -54,6 +59,31 @@ def test_pretrain_dataset_pack_bin_schedule() -> None:
 
     # 后续阶段块长为 16，最后一条允许短于 16。
     assert 0 < first_three[2]["input_ids"].shape[0] <= 16
+
+
+def test_streaming_datasets_delegate_process_sharding_to_accelerate(
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr(
+        pre_train_dataset,
+        "get_worker_info",
+        lambda: SimpleNamespace(id=1, num_workers=2),
+    )
+    monkeypatch.setattr(dist, "is_available", lambda: True)
+    monkeypatch.setattr(dist, "is_initialized", lambda: True)
+    monkeypatch.setattr(dist, "get_rank", lambda: 5)
+    monkeypatch.setattr(dist, "get_world_size", lambda: 8)
+
+    assert PreTrainDataset._shard_info() == (1, 2)
+
+    project_root = Path(__file__).resolve().parents[2]
+    for stage in ("pretrain", "sft"):
+        train_args = json.loads(
+            (project_root / "config" / stage / "train_args.json").read_text(
+                encoding="utf-8"
+            )
+        )
+        assert train_args["accelerator_config"]["dispatch_batches"] is True
 
 
 def test_sft_dataset_load_from_preprocess_tmp() -> None:
