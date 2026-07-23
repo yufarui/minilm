@@ -146,17 +146,31 @@ class PreTrainDataset(IterableDataset):
     def _iter_token_ids_parquet_shards(
         self, shard_id: int, num_shards: int, parquet_files: list[Path]
     ) -> Iterator[list[int]]:
-        """按文件分配给 shard，尽量避免多个 worker 竞争同一 parquet 文件。"""
-        my_files = [f for i, f in enumerate(parquet_files) if i % num_shards == shard_id]
-        for file_path in my_files:
+        """优先按文件分片；文件数不足时在单个文件内继续按行分片。"""
+        if len(parquet_files) >= num_shards:
+            assignments = [
+                (file_path, 0, 1)
+                for i, file_path in enumerate(parquet_files)
+                if i % num_shards == shard_id
+            ]
+        else:
+            file_index = shard_id % len(parquet_files)
+            row_shard_id = shard_id // len(parquet_files)
+            row_num_shards = (
+                (num_shards - 1 - file_index) // len(parquet_files)
+            ) + 1
+            assignments = [
+                (parquet_files[file_index], row_shard_id, row_num_shards)
+            ]
+
+        for file_path, row_shard_id, row_num_shards in assignments:
             pf = pq.ParquetFile(str(file_path))
-            table = pf.read(columns=["input_ids"])
-            ids_array = table.column("input_ids")
-            for chunk in ids_array.chunks:
-                for i in range(len(chunk)):
-                    ids = chunk[i].as_py()
-                    if ids:
+            row_index = 0
+            for batch in pf.iter_batches(columns=["input_ids"], batch_size=2048):
+                for ids in batch.column(0).to_pylist():
+                    if row_index % row_num_shards == row_shard_id and ids:
                         yield list(ids)
+                    row_index += 1
 
     @staticmethod
     def _shard_info() -> tuple[int, int]:

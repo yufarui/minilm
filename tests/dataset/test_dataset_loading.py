@@ -2,6 +2,10 @@ import json
 import pytest
 from itertools import islice
 
+import pyarrow as pa
+import pyarrow.parquet as pq
+
+import src.dataset.pre_train_dataset as pre_train_dataset
 from src.dataset.dpo_dataset import DPODataset
 from src.dataset.pre_train_dataset import PreTrainDataset
 from src.dataset.sft_dataset import SFTDataset
@@ -54,6 +58,47 @@ def test_pretrain_dataset_pack_bin_schedule() -> None:
 
     # 后续阶段块长为 16，最后一条允许短于 16。
     assert 0 < first_three[2]["input_ids"].shape[0] <= 16
+
+
+def test_pretrain_parquet_files_are_split_when_fewer_than_shards(
+    tmp_path, monkeypatch
+) -> None:
+    parquet_files = []
+    expected_rows = []
+    for file_index in range(2):
+        rows = [[file_index * 10 + row_index] for row_index in range(4)]
+        expected_rows.extend(rows)
+        file_path = tmp_path / f"part-{file_index:05d}.parquet"
+        pq.write_table(
+            pa.table(
+                {"input_ids": pa.array(rows, type=pa.list_(pa.int32()))}
+            ),
+            file_path,
+        )
+        parquet_files.append(file_path)
+
+    real_parquet_file = pq.ParquetFile
+
+    class StreamingOnlyParquetFile:
+        def __init__(self, path) -> None:
+            self._inner = real_parquet_file(path)
+
+        def read(self, *args, **kwargs):
+            raise AssertionError("parquet shards must not be materialized with read()")
+
+        def iter_batches(self, *args, **kwargs):
+            yield from self._inner.iter_batches(*args, **kwargs)
+
+    monkeypatch.setattr(pre_train_dataset.pq, "ParquetFile", StreamingOnlyParquetFile)
+
+    ds = object.__new__(PreTrainDataset)
+    rows_by_shard = [
+        list(ds._iter_token_ids_parquet_shards(shard_id, 4, parquet_files))
+        for shard_id in range(4)
+    ]
+
+    assert all(rows_by_shard)
+    assert sorted(row for rows in rows_by_shard for row in rows) == sorted(expected_rows)
 
 
 def test_sft_dataset_load_from_preprocess_tmp() -> None:
