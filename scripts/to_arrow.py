@@ -8,6 +8,7 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 from tqdm import tqdm
 
+from src.dataset.pretrain_source import remove_legacy_hf_disk_artifacts
 from src.ref_model import get_auto_tokenizer_local
 
 """
@@ -135,6 +136,8 @@ def build_arrow_dataset(
         "splits": {"train": {"name": "train", "num_examples": total_after}},
     }
     (out_dir / "dataset_info.json").write_text(json.dumps(info, ensure_ascii=False), encoding="utf-8")
+    for removed in remove_legacy_hf_disk_artifacts(out_dir):
+        print(f"Removed legacy HF artifact: {removed}")
 
     print(f"Total lines: {total_before}")
     print(f"After filtering: {total_after} samples ({dropped} removed)")
