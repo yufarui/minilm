@@ -1,6 +1,7 @@
 import json
 from pathlib import Path
 
+from src.preprocess.job_config import PreprocessJobFile
 from src.preprocess.strategies.pipeline import PreprocessPipeline, PreprocessPipelineConfig
 from src.preprocess.strategies.sft_pipeline import SftPipelineConfig, SftPreprocessPipeline
 
@@ -23,6 +24,22 @@ def _test_case_dir(case_name: str) -> Path:
     case_dir = TEST_TMP_DIR / case_name
     case_dir.mkdir(parents=True, exist_ok=True)
     return case_dir
+
+
+def test_default_pretrain_preprocess_feeds_training_config():
+    """Default preprocess JSONL + to_arrow output must match pretrain data_config."""
+    preprocess_job = PreprocessJobFile.load("config/preprocess/pipeline.job.yaml")
+    data_config = json.loads(Path("config/pretrain/data_config.json").read_text(encoding="utf-8"))
+    script = Path("scripts/preprocess_pretrain.sh").read_text(encoding="utf-8")
+
+    assert preprocess_job.output_path == "data/pretrain/pretrain_train.jsonl"
+    assert (
+        preprocess_job.pretrain_split.val_output_path == data_config["eval_data_path"]
+    )
+    assert data_config["train_data_path"] == "data/pretrain/pretrain_train_arrow"
+    assert 'DEFAULT_TRAIN_JSONL="data/pretrain/pretrain_train.jsonl"' in script
+    assert 'DEFAULT_TRAIN_ARROW="data/pretrain/pretrain_train_arrow"' in script
+    assert "scripts/to_arrow.py" in script
 
 
 def test_pretrain_pipeline_with_100_synthetic_rows():
