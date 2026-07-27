@@ -13,6 +13,8 @@ from datasets import load_from_disk
 import pyarrow.parquet as pq
 from torch.utils.data import IterableDataset, get_worker_info
 
+from src.dataset.pretrain_source import resolve_pretrain_source
+
 logger = logging.getLogger(__name__)
 
 
@@ -198,14 +200,15 @@ class PreTrainDataset(IterableDataset):
             return int(sz)
 
         p = Path(self.data_path)
-        use_arrow = p.is_dir() and (p / "dataset_info.json").exists() and (p / "state.json").exists()
-        parquet_files = sorted(p.glob("*.parquet")) if p.is_dir() else []
-        use_parquet = p.is_file() and p.suffix == ".parquet"
-        if use_arrow:
-            ids_iter = self._iter_token_ids_arrow(shard_id, num_shards)
-        elif parquet_files:
+        source, parquet_files = resolve_pretrain_source(p)
+        # Prefer parquet shards over HF save_to_disk: a corpus rebuild with the
+        # current to_arrow writer leaves part-*.parquet + dataset_info.json but does
+        # not delete leftover state.json / *.arrow from older save_to_disk runs.
+        if source == "parquet-shards":
             ids_iter = self._iter_token_ids_parquet_shards(shard_id, num_shards, parquet_files)
-        elif use_parquet:
+        elif source == "arrow":
+            ids_iter = self._iter_token_ids_arrow(shard_id, num_shards)
+        elif source == "parquet":
             logger.warning(
                 "Using single parquet file with row-level sharding; this may cause I/O contention."
             )
@@ -251,7 +254,7 @@ class PreTrainDataset(IterableDataset):
 
         logger.info(
             "PreTrainDataset(streaming): source=%s docs=%s emitted=%s max_chunk=%s skipped_empty=%s shard=%s/%s stages=%s",
-            "arrow" if use_arrow else ("parquet-shards" if parquet_files else ("parquet" if use_parquet else "jsonl")),
+            source,
             seen_docs,
             emitted,
             self.pack_bin_size,
