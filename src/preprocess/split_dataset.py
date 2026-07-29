@@ -33,6 +33,14 @@ def split_pretrain_train_val(
     k = min(max(int(val_size), 0), n)
     if k <= 0:
         return rows, []
+    # Cap so the training file is never rewritten empty when cleaned n is
+    # smaller than (or equal to) the configured val_size.
+    if k >= n:
+        raise ValueError(
+            f"pretrain split would leave an empty training set: "
+            f"val_size={val_size} with only {n} cleaned row(s). "
+            f"Reduce split.pretrain.val_size or disable the split."
+        )
     rng = random.Random(seed)
     val_idx = set(rng.sample(range(n), k))
     train_rows: list[dict[str, Any]] = []
@@ -96,6 +104,16 @@ def split_sft_train_and_eval_sets(
     multi_candidates = [i for i in remaining if _is_multi_turn(rows[i], conversations_field)]
     multi_k = min(max(int(multi_turn_val_size), 0), len(multi_candidates))
     multi_idx = set(rng.sample(multi_candidates, multi_k)) if multi_k > 0 else set()
+
+    # Reject configs that would rewrite the training JSONL as empty (e.g. mini
+    # corpora where every row is multi-turn and multi_turn_val_size >= n).
+    if n > 0 and len(tool_idx) + len(multi_idx) >= n:
+        raise ValueError(
+            f"SFT split would leave an empty training set: "
+            f"tool_call_val_size={tool_val_size}, multi_turn_val_size={multi_turn_val_size} "
+            f"selected {len(tool_idx) + len(multi_idx)}/{n} cleaned row(s) for validation. "
+            f"Reduce val sizes or disable the split."
+        )
 
     train_rows: list[dict[str, Any]] = []
     tool_val_rows: list[dict[str, Any]] = []
