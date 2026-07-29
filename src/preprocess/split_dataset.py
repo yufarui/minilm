@@ -33,7 +33,7 @@ def split_pretrain_train_val(
     k = min(max(int(val_size), 0), n)
     if k <= 0:
         return rows, []
-    # Cap so the training file is never rewritten empty when cleaned n is
+    # Fail loud: never rewrite the training JSONL as empty when cleaned n is
     # smaller than (or equal to) the configured val_size.
     if k >= n:
         raise ValueError(
