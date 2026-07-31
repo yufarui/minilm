@@ -9,6 +9,29 @@ from typing import Any
 _TOOL_FENCE_RE = re.compile(r"^```(?:json)?\s*|\s*```$", re.MULTILINE)
 
 
+def coerce_tool_calls_to_list(raw: Any) -> list[Any] | None:
+    """将 ``assistant.tool_calls`` 规范为非空列表；无法规范时返回 ``None``。
+
+    接受：
+    - 已是 ``list``（原样返回，允许空列表）
+    - 单个 JSON/dict 对象（包装为单元素列表）
+    - JSON 字符串（列表或对象）
+    """
+    if isinstance(raw, list):
+        return raw
+    if isinstance(raw, dict):
+        return [raw] if raw else None
+    if isinstance(raw, str):
+        s = raw.strip()
+        if not s:
+            return None
+        parsed, ok = try_repair_tool_calls_json(s)
+        if not ok or parsed is None:
+            return None
+        return coerce_tool_calls_to_list(parsed)
+    return None
+
+
 def conversation_concat_text(messages: list[dict[str, Any]]) -> str:
     """用于语言检测、近似去重、长度与符号比例。"""
     parts: list[str] = []
@@ -22,6 +45,8 @@ def conversation_concat_text(messages: list[dict[str, Any]]) -> str:
         if isinstance(tc, str) and tc.strip():
             parts.append(tc)
         elif isinstance(tc, list):
+            parts.append(json.dumps(tc, ensure_ascii=False))
+        elif isinstance(tc, dict) and tc:
             parts.append(json.dumps(tc, ensure_ascii=False))
     return "\n".join(parts)
 
@@ -48,7 +73,10 @@ def validate_role_chain(messages: list[dict[str, Any]]) -> tuple[bool, str | Non
         asst = messages[i]
         i += 1
         tcalls = asst.get("tool_calls")
-        has_tools = isinstance(tcalls, list) and len(tcalls) > 0
+        # 列表或单对象均视为发起了 tool call（与 coerce_tool_calls_to_list 对齐）
+        has_tools = (isinstance(tcalls, list) and len(tcalls) > 0) or (
+            isinstance(tcalls, dict) and bool(tcalls)
+        )
         if has_tools:
             saw_tool = False
             while i < n and messages[i].get("role") == "tool":
@@ -110,7 +138,8 @@ def normalize_messages_tool_calls(
     messages: list[dict[str, Any]],
 ) -> tuple[list[dict[str, Any]], int]:
     """
-    将 ``assistant.tool_calls`` 从字符串尽量解析为列表；无法解析则移除该键以免下游模板崩溃。
+    将 ``assistant.tool_calls`` 规范为列表（字符串 JSON / 单对象均可）；
+    无法规范则移除该键以免下游 chat template 崩溃或静默丢监督。
     返回 (新消息列表, 成功修复条数)。
     """
     out = []
@@ -121,17 +150,15 @@ def normalize_messages_tool_calls(
         mm = dict(m)
         if mm.get("role") == "assistant" and "tool_calls" in mm:
             raw = mm["tool_calls"]
-            if isinstance(raw, str):
-                parsed, ok = try_repair_tool_calls_json(raw)
-                if ok and parsed is not None:
-                    mm["tool_calls"] = parsed
+            if isinstance(raw, list):
+                pass
+            else:
+                coerced = coerce_tool_calls_to_list(raw)
+                if coerced is not None:
+                    mm["tool_calls"] = coerced
                     repaired += 1
                 else:
                     del mm["tool_calls"]
-            elif isinstance(raw, list):
-                pass
-            else:
-                del mm["tool_calls"]
         out.append(mm)
     return out, repaired
 
@@ -152,7 +179,7 @@ def tool_calls_json_length(messages: list[dict[str, Any]]) -> int:
         tc = m.get("tool_calls")
         if isinstance(tc, str):
             total += len(tc)
-        elif isinstance(tc, list):
+        elif isinstance(tc, (list, dict)):
             total += len(json.dumps(tc, ensure_ascii=False))
     return total
 

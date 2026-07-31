@@ -119,11 +119,29 @@ class SFTDataset(IterableDataset):
         )
 
     @staticmethod
-    def _tool_calls_fill(conv: List[Dict[str, Any]]):
+    def _coerce_tool_calls(raw: Any) -> list[Any] | None:
+        """规范为列表；单个对象包装为单元素列表。无法规范则返回 None。"""
+        if isinstance(raw, list):
+            return raw
+        if isinstance(raw, dict):
+            return [raw] if raw else None
+        if isinstance(raw, str):
+            s = raw.strip()
+            if not s:
+                return None
+            try:
+                parsed = json.loads(s)
+            except json.JSONDecodeError:
+                return None
+            return SFTDataset._coerce_tool_calls(parsed)
+        return None
+
+    @staticmethod
+    def _tool_calls_fill(conv: List[Dict[str, Any]]) -> bool:
         """
         chat_template.jinja 需要 assistant.tool_calls 为列表；
-        JSONL 里常为 JSON 字符串，否则 Jinja 会按字符迭代。
-        若存在非空但非法的 tool_calls JSON，返回 False（应跳过该条样本）。
+        JSONL 里常为 JSON 字符串或单个对象。
+        若存在非空但非法的 tool_calls，返回 False（调用方应跳过该条样本）。
         """
         for msg in conv:
             if not isinstance(msg, dict) or msg.get("role") != "assistant":
@@ -133,16 +151,18 @@ class SFTDataset(IterableDataset):
             raw = msg["tool_calls"]
             if isinstance(raw, list):
                 continue
-            if not isinstance(raw, str):
-                logger.warning("assistant.tool_calls 类型无效（%s），跳过该字段", type(raw).__name__)
+            if isinstance(raw, str) and not raw.strip():
                 msg.pop("tool_calls", None)
                 continue
-            s = raw.strip()
-            try:
-                msg["tool_calls"] = json.loads(s)
-            except json.JSONDecodeError as e:
-                logger.warning("assistant.tool_calls JSON 无效，跳过该条: %s", e)
-                msg.pop("tool_calls", None)
+            coerced = SFTDataset._coerce_tool_calls(raw)
+            if coerced is None:
+                logger.warning(
+                    "assistant.tool_calls 无法规范为列表（类型=%s），跳过该条",
+                    type(raw).__name__,
+                )
+                return False
+            msg["tool_calls"] = coerced
+        return True
 
     def _encode_conversation(self, conversations: List[Dict[str, Any]]) -> tuple[list[int], list[int]] | None:
         """返回 (input_ids, labels)；不修改原始样本。"""
@@ -173,7 +193,8 @@ class SFTDataset(IterableDataset):
             if random.random() < self.add_system_ratio:
                 conv.insert(0, {"role": "system", "content": random.choice(self.SYSTEM_PROMPTS)})
 
-        self._tool_calls_fill(conv)
+        if not self._tool_calls_fill(conv):
+            return None
 
         text = self.tokenizer.apply_chat_template(
             conv,

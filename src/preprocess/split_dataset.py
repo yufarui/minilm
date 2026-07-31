@@ -62,6 +62,8 @@ def _has_tool_calls(row: dict[str, Any], conversations_field: str) -> bool:
         tc = msg.get("tool_calls")
         if isinstance(tc, list) and tc:
             return True
+        if isinstance(tc, dict) and tc:
+            return True
         if isinstance(tc, str) and tc.strip():
             return True
     return False
