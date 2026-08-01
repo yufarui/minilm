@@ -117,20 +117,27 @@ def _iter_jsonl(path: Path):
 
 
 def _parse_tools_from_system(first_message: dict[str, Any]) -> list[dict[str, Any]] | None:
+    """解析 system.tools；单个对象 schema 包装为单元素列表（与 SFT/DPO 训练侧一致）。"""
     raw_tools = first_message.get("tools")
     if raw_tools is None:
         return None
     if isinstance(raw_tools, list):
         return raw_tools
+    if isinstance(raw_tools, dict):
+        return [raw_tools] if raw_tools else None
     if isinstance(raw_tools, str):
         s = raw_tools.strip()
         if not s:
             return None
         try:
             parsed = json.loads(s)
-            return parsed if isinstance(parsed, list) else None
         except json.JSONDecodeError:
             return None
+        if isinstance(parsed, list):
+            return parsed
+        if isinstance(parsed, dict) and parsed:
+            return [parsed]
+        return None
     return None
 
 
