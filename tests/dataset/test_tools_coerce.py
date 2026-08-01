@@ -96,11 +96,14 @@ def test_sft_object_tools_render_schema_not_dict_keys():
     text = tok.decode(encoded["input_ids"].tolist())
 
     assert "get_weather" in text
+    # Full schema must appear; bare-object tools would only emit dict keys.
     assert '"name": "get_weather"' in text or '"name":"get_weather"' in text
-    # Jinja iterates dict keys when tools is a bare object — those must not appear alone.
-    tools_block = text.split("<tools>")[1].split("</tools>")[0]
+    assert "parameters" in text
+    assert '"city"' in text or "'city'" in text
+    # Instructional copy contains an empty <tools></tools> mention; use the last block.
+    tools_block = text.rsplit("<tools>", 1)[1].split("</tools>", 1)[0]
     assert "get_weather" in tools_block
-    assert tools_block.strip() not in {'"name"\n"parameters"', '"name""parameters"'}
+    assert "name" in tools_block and "parameters" in tools_block
 
 
 def test_sft_stringified_object_tools_same_as_list():
@@ -125,6 +128,6 @@ def test_sft_stringified_object_tools_same_as_list():
     ds = SFTDataset(path, tok, pack_bin_size=4096)
     ds.add_system_ratio = 0.0
     text = tok.decode(next(iter(ds))["input_ids"].tolist())
-    tools_block = text.split("<tools>")[1].split("</tools>")[0]
+    tools_block = text.rsplit("<tools>", 1)[1].split("</tools>", 1)[0]
     assert "get_weather" in tools_block
     assert "parameters" in tools_block
