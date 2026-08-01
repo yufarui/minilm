@@ -119,6 +119,29 @@ class SFTDataset(IterableDataset):
         )
 
     @staticmethod
+    def _coerce_tools(raw: Any) -> list[Any] | None:
+        """将 ``system.tools`` 规范为工具 schema 列表。
+
+        ``chat_template.jinja`` 对 ``tools`` 做 ``for tool in tools``；若传入单个
+        dict，Jinja 会迭代其 key，把 ``\"name\"`` / ``\"parameters\"`` 写进
+        ``<tools>``，静默毁掉工具定义监督。单个对象包装为单元素列表。
+        """
+        if isinstance(raw, list):
+            return raw
+        if isinstance(raw, dict):
+            return [raw] if raw else None
+        if isinstance(raw, str):
+            s = raw.strip()
+            if not s:
+                return None
+            try:
+                parsed = json.loads(s)
+            except json.JSONDecodeError:
+                return None
+            return SFTDataset._coerce_tools(parsed)
+        return None
+
+    @staticmethod
     def _tool_calls_fill(conv: List[Dict[str, Any]]):
         """
         chat_template.jinja 需要 assistant.tool_calls 为列表；
@@ -158,16 +181,16 @@ class SFTDataset(IterableDataset):
         if first_message.get("role") == "system":
             raw_tools = first_message.get("tools")
             if raw_tools is not None:
-                if isinstance(raw_tools, list):
-                    tools = raw_tools
-                elif isinstance(raw_tools, str):
-                    s = raw_tools.strip()
-                    if s:
-                        try:
-                            tools = json.loads(s)
-                        except json.JSONDecodeError as e:
-                            logger.warning("system.tools JSON 无效，跳过该条: %s", e)
-                            return None
+                if isinstance(raw_tools, str) and not raw_tools.strip():
+                    tools = None
+                else:
+                    tools = self._coerce_tools(raw_tools)
+                    if tools is None:
+                        logger.warning(
+                            "system.tools 无法规范为列表（类型=%s），跳过该条",
+                            type(raw_tools).__name__,
+                        )
+                        return None
 
         if first_message.get("role") != "system":
             if random.random() < self.add_system_ratio:

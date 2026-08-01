@@ -43,24 +43,39 @@ class DPODataset:
         return "role" in first and "content" in first
 
     @staticmethod
+    def _coerce_tools(raw: Any) -> list[Any] | None:
+        """将 ``system.tools`` 规范为列表；单个对象包装为单元素列表。"""
+        if isinstance(raw, list):
+            return raw
+        if isinstance(raw, dict):
+            return [raw] if raw else None
+        if isinstance(raw, str):
+            s = raw.strip()
+            if not s:
+                return None
+            try:
+                parsed = json.loads(s)
+            except json.JSONDecodeError:
+                return None
+            return DPODataset._coerce_tools(parsed)
+        return None
+
+    @staticmethod
     def _tools_from_messages(messages: list[dict[str, Any]]) -> list[Any] | None:
         if not messages or messages[0].get("role") != "system":
             return None
         raw = messages[0].get("tools")
         if raw is None:
             return None
-        if isinstance(raw, list):
-            return raw
-        if isinstance(raw, str):
-            s = raw.strip()
-            if not s:
-                return None
-            try:
-                return json.loads(s)
-            except json.JSONDecodeError as e:
-                logger.warning("system.tools JSON 无效，将不传 tools: %s", e)
-                return None
-        return None
+        if isinstance(raw, str) and not raw.strip():
+            return None
+        tools = DPODataset._coerce_tools(raw)
+        if tools is None:
+            logger.warning(
+                "system.tools 无法规范为列表（类型=%s），将不传 tools",
+                type(raw).__name__,
+            )
+        return tools
 
     @classmethod
     def _chat_triplet(
