@@ -40,9 +40,12 @@ class MoeGate(nn.Module):
     def reset_parameters(self):
         nn.init.kaiming_uniform_(self.weight, a=math.sqrt(5))
 
-    def forward(self, hidden_states):
+    def forward(self, hidden_states, token_mask: torch.Tensor | None = None):
         """
         hidden_states: [B, S, H]
+        token_mask: optional [B, S] bool/0-1；True/1 = 参与 aux 统计的真实 token。
+            动态 padding 下 pad 位必须排除，否则（尤其 flash/SDPA 下 pad 隐状态恒为 0）
+            所有 pad 会塌缩到同一 expert，严重扭曲负载均衡梯度。
         """
         B, S, H = hidden_states.shape
         x = hidden_states.reshape(-1, H)  # [N, H]
@@ -69,18 +72,29 @@ class MoeGate(nn.Module):
         aux_loss = torch.tensor(0.0, device=hidden_states.device)
 
         if self.training and self.alpha > 0:
-            # 每个 expert 被路由到的 token 占比（load 向量），归一化后 sum(load)=1
-            one_hot = F.one_hot(topk_idx, num_classes=self.n_routed_experts).float()  # [N, K, E]
-            load = one_hot.mean(dim=(0, 1))  # [E]
+            if token_mask is not None:
+                flat_keep = token_mask.reshape(-1).bool()
+            else:
+                flat_keep = None
 
-            # 每个 expert 的平均路由概率（prob 向量），归一化后 sum(prob)=1
-            prob_raw = scores
-            if self.scoring_func == "sigmoid":
-                prob_raw = prob_raw / (prob_raw.sum(dim=-1, keepdim=True) + 1e-9)
-            prob = prob_raw.mean(dim=0)  # [E]
-            prob = prob / (prob.sum() + 1e-9)
+            if flat_keep is not None and not flat_keep.any():
+                aux_loss = hidden_states.new_zeros(())
+            else:
+                idx_for_aux = topk_idx if flat_keep is None else topk_idx[flat_keep]
+                scores_for_aux = scores if flat_keep is None else scores[flat_keep]
 
-            # load 与 prob 对齐（Switch 风格：E * dot(load, prob)）
-            aux_loss = self.alpha * (load * prob).sum() * self.n_routed_experts
+                # 每个 expert 被路由到的 token 占比（load 向量），归一化后 sum(load)=1
+                one_hot = F.one_hot(idx_for_aux, num_classes=self.n_routed_experts).float()  # [M, K, E]
+                load = one_hot.mean(dim=(0, 1))  # [E]
+
+                # 每个 expert 的平均路由概率（prob 向量），归一化后 sum(prob)=1
+                prob_raw = scores_for_aux
+                if self.scoring_func == "sigmoid":
+                    prob_raw = prob_raw / (prob_raw.sum(dim=-1, keepdim=True) + 1e-9)
+                prob = prob_raw.mean(dim=0)  # [E]
+                prob = prob / (prob.sum() + 1e-9)
+
+                # load 与 prob 对齐（Switch 风格：E * dot(load, prob)）
+                aux_loss = self.alpha * (load * prob).sum() * self.n_routed_experts
 
         return topk_idx, topk_weight, aux_loss

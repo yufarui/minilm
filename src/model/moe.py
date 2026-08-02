@@ -38,15 +38,16 @@ class Moe(nn.Module):
 
         self.aux_loss = torch.tensor(0.0)
 
-    def forward(self, hidden_states):
+    def forward(self, hidden_states, token_mask: torch.Tensor | None = None):
         """
         hidden_states: [B, S, H]
+        token_mask: optional [B, S]；传给门控，仅用于 aux_loss 统计（排除 padding）。
         """
         identity = hidden_states
         B, S, H = hidden_states.shape
 
         # ===== gating =====
-        topk_idx, topk_weight, aux_loss = self.gate(hidden_states)
+        topk_idx, topk_weight, aux_loss = self.gate(hidden_states, token_mask=token_mask)
         self.aux_loss = aux_loss
 
         x = hidden_states.reshape(-1, H)  # [N, H]
