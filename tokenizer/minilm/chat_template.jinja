@@ -58,21 +58,26 @@
                 {{- '", "arguments": ' }}
                 {%- if tool_call.arguments is string %}
                     {{- tool_call.arguments }}
-                {%- else %}
+                {%- elif tool_call.arguments is defined and tool_call.arguments is not none and (tool_call.arguments is mapping or tool_call.arguments is sequence) %}
+                    {# HF Jinja 中 Undefined 的 is sequence=True，必须先 is defined #}
                     {{- tool_call.arguments | tojson }}
+                {%- else %}
+                    {# 缺省 / null / Undefined：避免 tojson 抛 TypeError 中断训练 #}
+                    {{- '{}' }}
                 {%- endif %}
                 {{- '}\n</tool_call>' }}
             {%- endfor %}
         {%- endif %}
         {{- '<|im_end|>\n' }}
-    {%- elif message.role == "tool" %}
-        {%- if loop.first or (messages[loop.index0 - 1].role != "tool") %}
+    {%- elif message.role == "tool" or message.role == "function" %}
+        {# OpenAI 旧版 role=function 与 role=tool 等价；不处理则整段 tool 观测被静默丢弃 #}
+        {%- if loop.first or (messages[loop.index0 - 1].role != "tool" and messages[loop.index0 - 1].role != "function") %}
             {{- '<|im_start|>user' }}
         {%- endif %}
         {{- '\n<tool_response>\n' }}
         {{- content }}
         {{- '\n</tool_response>' }}
-        {%- if loop.last or (messages[loop.index0 + 1].role != "tool") %}
+        {%- if loop.last or (messages[loop.index0 + 1].role != "tool" and messages[loop.index0 + 1].role != "function") %}
             {{- '<|im_end|>\n' }}
         {%- endif %}
     {%- endif %}

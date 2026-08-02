@@ -91,6 +91,9 @@ class DPODataset:
                     break
 
         tools = cls._tools_from_messages(prefix_c)
+        for m in prefix_c:
+            if isinstance(m, dict) and m.get("role") == "function":
+                m["role"] = "tool"
         prompt = tokenizer.apply_chat_template(
             prefix_c,
             tokenize=False,

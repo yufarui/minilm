@@ -27,6 +27,7 @@ from src.preprocess.sft_conversation import (
     assistant_contents,
     conversation_concat_text,
     count_turns,
+    normalize_legacy_tool_roles,
     normalize_messages_tool_calls,
     tool_calls_json_length,
     validate_role_chain,
@@ -254,6 +255,8 @@ class SftPreprocessPipeline:
             if self.cfg.normalize_markers:
                 messages = _apply_markers_to_messages(messages, self.cfg.normalize_markers)
                 stats.markers_normalized_rows += 1
+
+            messages, _n_fn = normalize_legacy_tool_roles(messages)
 
             if self.cfg.repair_tool_calls:
                 messages, nrep = normalize_messages_tool_calls(messages)
