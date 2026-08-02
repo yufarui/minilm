@@ -26,10 +26,32 @@ def conversation_concat_text(messages: list[dict[str, Any]]) -> str:
     return "\n".join(parts)
 
 
+def normalize_legacy_tool_roles(
+    messages: list[dict[str, Any]],
+) -> tuple[list[dict[str, Any]], int]:
+    """将 OpenAI 旧版 ``role=function`` 规范为 ``role=tool``。
+
+    chat 模板仅渲染 ``tool``/显式 ``function``；若上游只认 ``tool``，未规范化会导致
+    tool 观测整段从训练文本中消失。返回 (新消息列表, 改写条数)。
+    """
+    out: list[dict[str, Any]] = []
+    n = 0
+    for m in messages:
+        if not isinstance(m, dict):
+            continue
+        mm = dict(m)
+        if mm.get("role") == "function":
+            mm["role"] = "tool"
+            n += 1
+        out.append(mm)
+    return out, n
+
+
 def validate_role_chain(messages: list[dict[str, Any]]) -> tuple[bool, str | None]:
     """
     期望：可选 ``system`` 后，重复 ``user`` → ``assistant``；
-    若 ``assistant`` 含非空 ``tool_calls``，则须紧跟若干 ``tool``，再跟一个 ``assistant``。
+    若 ``assistant`` 含非空 ``tool_calls``，则须紧跟若干 ``tool``（含旧版 ``function``），
+    再跟一个 ``assistant``。
     """
     if not messages:
         return False, "empty"
@@ -51,7 +73,7 @@ def validate_role_chain(messages: list[dict[str, Any]]) -> tuple[bool, str | Non
         has_tools = isinstance(tcalls, list) and len(tcalls) > 0
         if has_tools:
             saw_tool = False
-            while i < n and messages[i].get("role") == "tool":
+            while i < n and messages[i].get("role") in {"tool", "function"}:
                 saw_tool = True
                 i += 1
             if not saw_tool:

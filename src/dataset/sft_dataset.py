@@ -12,6 +12,7 @@ import torch
 from torch.utils.data import IterableDataset
 
 from src.dataset.pre_train_dataset import PreTrainDataset, _iter_jsonl_objects
+from src.preprocess.sft_conversation import normalize_legacy_tool_roles
 
 logger = logging.getLogger(__name__)
 
@@ -173,15 +174,21 @@ class SFTDataset(IterableDataset):
             if random.random() < self.add_system_ratio:
                 conv.insert(0, {"role": "system", "content": random.choice(self.SYSTEM_PROMPTS)})
 
+        conv, _ = normalize_legacy_tool_roles(conv)
         self._tool_calls_fill(conv)
 
-        text = self.tokenizer.apply_chat_template(
-            conv,
-            tokenize=False,
-            add_generation_prompt=False,
-            tools=tools,
-            open_think=False,
-        )
+        try:
+            text = self.tokenizer.apply_chat_template(
+                conv,
+                tokenize=False,
+                add_generation_prompt=False,
+                tools=tools,
+                open_think=False,
+            )
+        except (TypeError, ValueError) as e:
+            # 模板对残缺 tool_calls（如缺 arguments）曾直接抛 TypeError，拖垮 IterableDataset worker
+            logger.warning("apply_chat_template 失败，跳过该条: %s", e)
+            return None
         if not isinstance(text, str):
             logger.warning(
                 "apply_chat_template(tokenize=False) 期望 str，得到 %s，跳过该条",

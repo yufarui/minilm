@@ -198,9 +198,13 @@ def _build_sft_text(
     if not _fill_assistant_tool_calls(conv):
         return None
 
+    for msg in conv:
+        if isinstance(msg, dict) and msg.get("role") == "function":
+            msg["role"] = "tool"
+
     try:
         text = _render_chat_template(chat_template, conv, tools)
-    except jinja2.exceptions.TemplateError:
+    except (jinja2.exceptions.TemplateError, TypeError, ValueError):
         return None
     if not isinstance(text, str):
         return None
