@@ -5,8 +5,10 @@ import logging
 from pathlib import Path
 from typing import Any, Mapping
 
-from datasets import Dataset, load_dataset
+from datasets import Dataset, Features, Value, load_dataset
 from transformers import PreTrainedTokenizerBase
+
+from src.util.message_content import normalize_messages_content
 
 logger = logging.getLogger(__name__)
 
@@ -19,7 +21,8 @@ class DPODataset:
     1. 对话偏好（与 TRL 对齐）：仅 ``chosen`` / ``rejected``，值为消息列表
        ``[{"role": "user"|"assistant", "content": "..."}, ...]``，最后一条须为
        ``assistant``；二者除最后一条 assistant 外应一致。此时须提供 ``tokenizer``，
-       用 ``apply_chat_template(..., add_generation_prompt=True)`` 生成 ``prompt``。
+       用 ``apply_chat_template(..., add_generation_prompt=True)`` 生成 ``prompt``，
+       并用完整模板渲染截取 completion（保留 ``tool_calls`` / ``<|im_end|>``）。
 
     2. 扁平格式：``prompt`` / ``chosen`` / ``rejected`` 均为字符串（``tokenizer`` 可省略）。
     """
@@ -63,6 +66,55 @@ class DPODataset:
         return None
 
     @classmethod
+    def _render_prompt_and_completion(
+        cls,
+        messages: list[dict[str, Any]],
+        tokenizer: PreTrainedTokenizerBase,
+    ) -> tuple[str, str]:
+        """用 chat 模板生成 (prompt_with_gen_header, completion)。
+
+        completion 为最后一条 assistant 轮的模板渲染（含 tool_calls 与 eos），
+        避免只取 ``content`` 丢掉工具调用，或 ``content is None`` 变成字面量 ``\"None\"``。
+        """
+        normalized, _ = normalize_messages_content([dict(m) for m in messages])
+        if normalized is None:
+            raise ValueError("DPO 消息 content 无法规范为字符串（例如非法 multipart）。")
+        messages = normalized
+        prefix = [dict(m) for m in messages[:-1]]
+        tools = cls._tools_from_messages(prefix)
+        prompt = tokenizer.apply_chat_template(
+            prefix,
+            tokenize=False,
+            add_generation_prompt=True,
+            tools=tools,
+            open_think=False,
+        )
+        full = tokenizer.apply_chat_template(
+            messages,
+            tokenize=False,
+            add_generation_prompt=False,
+            tools=tools,
+            open_think=False,
+        )
+        if not isinstance(prompt, str):
+            prompt = tokenizer.decode(prompt) if hasattr(prompt, "tolist") else str(prompt)
+        if not isinstance(full, str):
+            full = tokenizer.decode(full) if hasattr(full, "tolist") else str(full)
+
+        if full.startswith(prompt):
+            completion = full[len(prompt) :]
+        else:
+            logger.warning(
+                "DPO chat 完整渲染不是 prompt 前缀，回退为最后一条 assistant.content。"
+            )
+            raw = messages[-1].get("content")
+            completion = "" if raw is None else str(raw)
+
+        # TRL 非对话路径会对未以 eos 结尾的 completion 追加 eos；去掉模板尾换行以便 endswith 命中。
+        completion = completion.rstrip("\n")
+        return prompt, completion
+
+    @classmethod
     def _chat_triplet(
         cls,
         chosen: list[dict[str, Any]],
@@ -90,21 +142,16 @@ class DPODataset:
                     )
                     break
 
-        tools = cls._tools_from_messages(prefix_c)
-        prompt = tokenizer.apply_chat_template(
-            prefix_c,
-            tokenize=False,
-            add_generation_prompt=False,
-            tools=tools,
-            open_think=False,
-        )
-        if not isinstance(prompt, str):
-            prompt = tokenizer.decode(prompt) if hasattr(prompt, "tolist") else str(prompt)
+        prompt, chosen_text = cls._render_prompt_and_completion(chosen, tokenizer)
+        _prompt_r, rejected_text = cls._render_prompt_and_completion(rejected, tokenizer)
+        if _prompt_r != prompt:
+            # 前缀不一致时仍以 chosen 侧 prompt 为准，但 rejected completion 保持自身模板渲染。
+            logger.warning("chosen/rejected 渲染后的 prompt 不一致，DPO 将使用 chosen 侧 prompt。")
 
         return {
             "prompt": prompt,
-            "chosen": str(chosen[-1]["content"]),
-            "rejected": str(rejected[-1]["content"]),
+            "chosen": chosen_text,
+            "rejected": rejected_text,
         }
 
     @classmethod
@@ -142,8 +189,21 @@ class DPODataset:
                 "rejected": str(r_raw),
             }
 
-        drop = [c for c in ds.column_names if c not in cls.OUTPUT_COLUMNS]
-        return ds.map(_row_to_trl, remove_columns=drop)
+        # 对话行常被 Arrow 推断为 List(Json)。仅 remove_columns 仍可能沿用旧 List 类型，
+        # 把 str completion 铸成字符列表（"hello" → ["h","e",...]），导致 TRL add_eos/拼接崩溃。
+        # 显式 Features(string) + 移除原列，强制重建为 TRL 所需的纯字符串列。
+        string_features = Features(
+            {
+                "prompt": Value("string"),
+                "chosen": Value("string"),
+                "rejected": Value("string"),
+            }
+        )
+        return ds.map(
+            _row_to_trl,
+            remove_columns=list(ds.column_names),
+            features=string_features,
+        )
 
     def as_hf_dataset(self) -> Dataset:
         return self.dataset
