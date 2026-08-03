@@ -6,7 +6,22 @@ import json
 import re
 from typing import Any
 
+from src.util.message_content import coerce_content_to_text, normalize_messages_content
+
 _TOOL_FENCE_RE = re.compile(r"^```(?:json)?\s*|\s*```$", re.MULTILINE)
+
+# 再导出，供 preprocess 侧 ``from src.preprocess.sft_conversation import ...`` 使用。
+__all__ = [
+    "assistant_contents",
+    "coerce_content_to_text",
+    "conversation_concat_text",
+    "count_turns",
+    "normalize_messages_content",
+    "normalize_messages_tool_calls",
+    "tool_calls_json_length",
+    "try_repair_tool_calls_json",
+    "validate_role_chain",
+]
 
 
 def conversation_concat_text(messages: list[dict[str, Any]]) -> str:
@@ -16,7 +31,11 @@ def conversation_concat_text(messages: list[dict[str, Any]]) -> str:
         if not isinstance(m, dict):
             continue
         c = m.get("content")
-        if c is not None:
+        text, ok = coerce_content_to_text(c)
+        if ok and text:
+            parts.append(text)
+        elif c is not None and not ok:
+            # 无法规范时回退 str，避免误杀；训练路径会另行跳过/规范
             parts.append(str(c))
         tc = m.get("tool_calls")
         if isinstance(tc, str) and tc.strip():

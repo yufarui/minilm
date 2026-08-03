@@ -8,6 +8,8 @@ from typing import Any, Mapping
 from datasets import Dataset, Features, Value, load_dataset
 from transformers import PreTrainedTokenizerBase
 
+from src.util.message_content import normalize_messages_content
+
 logger = logging.getLogger(__name__)
 
 
@@ -74,6 +76,10 @@ class DPODataset:
         completion 为最后一条 assistant 轮的模板渲染（含 tool_calls 与 eos），
         避免只取 ``content`` 丢掉工具调用，或 ``content is None`` 变成字面量 ``\"None\"``。
         """
+        normalized, _ = normalize_messages_content([dict(m) for m in messages])
+        if normalized is None:
+            raise ValueError("DPO 消息 content 无法规范为字符串（例如非法 multipart）。")
+        messages = normalized
         prefix = [dict(m) for m in messages[:-1]]
         tools = cls._tools_from_messages(prefix)
         prompt = tokenizer.apply_chat_template(

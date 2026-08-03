@@ -12,6 +12,7 @@ import torch
 from torch.utils.data import IterableDataset
 
 from src.dataset.pre_train_dataset import PreTrainDataset, _iter_jsonl_objects
+from src.util.message_content import normalize_messages_content
 
 logger = logging.getLogger(__name__)
 
@@ -148,6 +149,12 @@ class SFTDataset(IterableDataset):
         """返回 (input_ids, labels)；不修改原始样本。"""
         conv = copy.deepcopy(conversations)
         if not conv:
+            return None
+
+        # chat_template 对非字符串 content 置空；OpenAI multipart 必须先摊成文本。
+        conv, _ = normalize_messages_content(conv)
+        if conv is None:
+            logger.warning("conversations.content 无法规范为字符串，跳过该条")
             return None
 
         first_message = conv[0]

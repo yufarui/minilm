@@ -27,6 +27,7 @@ from src.preprocess.sft_conversation import (
     assistant_contents,
     conversation_concat_text,
     count_turns,
+    normalize_messages_content,
     normalize_messages_tool_calls,
     tool_calls_json_length,
     validate_role_chain,
@@ -233,6 +234,12 @@ class SftPreprocessPipeline:
                 continue
 
             messages = copy.deepcopy(conv)
+            # OpenAI multipart content（list of parts）在 chat_template 中会被当成非字符串
+            # 清空为 ''，必须先规范成纯文本，否则清洗会放行、训练却监督空回复。
+            messages, _n_content = normalize_messages_content(messages)
+            if messages is None:
+                stats.skipped_empty_conversations += 1
+                continue
             if self.cfg.drop_think_samples:
                 marker_hit = False
                 markers = [m for m in self.cfg.think_markers if isinstance(m, str) and m]
