@@ -31,6 +31,7 @@ from src.preprocess.sft_conversation import (
     tool_calls_json_length,
     validate_role_chain,
 )
+from src.util.tool_chain import has_orphan_tool_messages
 from src.preprocess.stats_types import SftPreprocessStats
 from src.preprocess.text_quality.length import equal_width_histogram
 from src.preprocess.text_quality.pipeline import (
@@ -266,6 +267,13 @@ class SftPreprocessPipeline:
                     if len(stats.role_violation_examples) < 8:
                         stats.role_violation_examples.append(reason or "role")
                     continue
+            elif has_orphan_tool_messages(messages):
+                # repair_tool_calls may delete unrepaired tool_calls while leaving
+                # tool observations; never train on that broken chain.
+                stats.skipped_role_order += 1
+                if len(stats.role_violation_examples) < 8:
+                    stats.role_violation_examples.append("orphan_tool_messages")
+                continue
 
             if self.cfg.filter_refuse_replies:
                 bad = False
