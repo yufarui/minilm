@@ -12,6 +12,7 @@ import torch
 from torch.utils.data import IterableDataset
 
 from src.dataset.pre_train_dataset import PreTrainDataset, _iter_jsonl_objects
+from src.util.tool_chain import has_orphan_tool_messages
 
 logger = logging.getLogger(__name__)
 
@@ -174,6 +175,11 @@ class SFTDataset(IterableDataset):
                 conv.insert(0, {"role": "system", "content": random.choice(self.SYSTEM_PROMPTS)})
 
         self._tool_calls_fill(conv)
+        if has_orphan_tool_messages(conv):
+            logger.warning(
+                "跳过 orphan tool 样本：存在 tool/function 消息但前序 assistant 无有效 tool_calls 列表"
+            )
+            return None
 
         text = self.tokenizer.apply_chat_template(
             conv,
