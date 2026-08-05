@@ -35,7 +35,7 @@
         {%- if message.reasoning_content is string %}
             {%- set reasoning_content = message.reasoning_content %}
         {%- else %}
-            {%- if '</think>' in content %}
+            {%- if '<think>' in content and '</think>' in content %}
                 {%- set reasoning_content = content.split('</think>')[0].rstrip('\n').split('<think>')[-1].lstrip('\n') %}
                 {%- set content = content.split('</think>')[-1].lstrip('\n') %}
             {%- endif %}
