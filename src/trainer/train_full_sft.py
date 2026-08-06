@@ -70,7 +70,8 @@ def run_sft(training_args: TrainingArguments, data_args: SftDataArguments) -> No
         else:
             eval_dataset = eval_map
 
-    data_collator = TrainDataCollator(tokenizer)
+    # SFT 不 packing；关闭 pack 分段，避免正文中的字面量 <|endoftext|> 切断对话注意力。
+    data_collator = TrainDataCollator(tokenizer, enable_pack_segments=False)
     extra_callbacks: list[TrainerCallback] = build_sft_trainer_callbacks(
         training_args,
         data_args,
