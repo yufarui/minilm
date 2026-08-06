@@ -144,3 +144,61 @@ def test_collator_outputs_feed_model_forward(tiny_config, local_tokenizer):
     )
     assert out.logits.shape[:2] == batch["input_ids"].shape
     assert torch.isfinite(out.logits).all()
+
+
+def test_sft_collator_keeps_context_across_literal_pack_sep(local_tokenizer):
+    """SFT must not treat in-content <|endoftext|> as a pack boundary.
+
+    With pack segments enabled, assistant labels after a literal sep cannot attend to
+    the user question that precedes it — silent instruction-tuning corruption.
+    """
+    sep = local_tokenizer.convert_tokens_to_ids("<|endoftext|>")
+    # prompt tokens … sep … supervised assistant tokens (labels != -100)
+    input_ids = [101, 102, 103, sep, 104, 201, 202, 203]
+    labels = [-100, -100, -100, -100, -100, 201, 202, 203]
+    features = [{"input_ids": input_ids, "labels": labels}]
+
+    broken = TrainDataCollator(local_tokenizer, enable_pack_segments=True)(features)
+    fixed = TrainDataCollator(local_tokenizer, enable_pack_segments=False)(features)
+
+    broken_mask = broken["attention_mask"][0, 0]
+    fixed_mask = fixed["attention_mask"][0, 0]
+    asst0 = 5
+
+    # Pack-segment mode isolates assistant from tokens before sep.
+    assert broken_mask[asst0, 0].item() == 0
+    assert broken_mask[asst0, 2].item() == 0
+    # SFT mode keeps full causal context through the literal sep.
+    assert fixed_mask[asst0, 0].item() == 1
+    assert fixed_mask[asst0, 2].item() == 1
+    assert fixed_mask[asst0, 3].item() == 1  # sep itself still visible causally
+    assert fixed_mask[asst0, 4].item() == 1
+    # Still causal: cannot attend future.
+    assert fixed_mask[asst0, 6].item() == 0
+
+    # Positions stay contiguous when pack segments are disabled.
+    assert torch.equal(
+        fixed["position_ids"][0],
+        torch.arange(len(input_ids), dtype=torch.long),
+    )
+
+
+def test_sft_trainer_disables_pack_segments():
+    import ast
+    from pathlib import Path
+
+    src = Path("src/trainer/train_full_sft.py").read_text(encoding="utf-8")
+    tree = ast.parse(src)
+    found = False
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+        func = node.func
+        name = getattr(func, "id", None) or getattr(func, "attr", None)
+        if name != "TrainDataCollator":
+            continue
+        for kw in node.keywords:
+            if kw.arg == "enable_pack_segments" and isinstance(kw.value, ast.Constant):
+                assert kw.value.value is False
+                found = True
+    assert found, "train_full_sft must construct TrainDataCollator(enable_pack_segments=False)"

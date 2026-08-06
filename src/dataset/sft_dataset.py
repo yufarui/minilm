@@ -20,7 +20,8 @@ class SFTDataset(IterableDataset):
     """对话 SFT：JSONL **一行一条样本**，流式读取，**不做 packing、不做截断**。
 
     - ``pack_bin_size`` 仅表示 ``max_seq_length``：编码后 **长度超过则跳过该条**（不截断、不拆对话）。
-    - 单条样本内通常 **不含** 预训练式 ``<|endoftext|>`` 合包分隔；``TrainDataCollator`` 仍按单段对话的 prefix/causal 规则构造掩码。
+    - 单条样本不做 packing。训练侧须使用 ``TrainDataCollator(..., enable_pack_segments=False)``：
+      若开启 pack 分段，对话正文中的字面量 ``<|endoftext|>`` 会被当成合包分隔符，切断 assistant 对 user 的注意力。
     - **labels**：与 ``chat_template.jinja`` 对齐，用「模板字符串 + offset_mapping」标 assistant 回复及本轮 ``eos``；避免子词边界导致子序列匹配失败、全 ``-100``、loss 为 nan。
     """
 
