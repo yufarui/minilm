@@ -12,6 +12,7 @@ import torch
 from torch.utils.data import IterableDataset
 
 from src.dataset.pre_train_dataset import PreTrainDataset, _iter_jsonl_objects
+from src.util.tool_call_arguments import normalize_messages_tool_call_arguments
 
 logger = logging.getLogger(__name__)
 
@@ -174,6 +175,9 @@ class SFTDataset(IterableDataset):
                 conv.insert(0, {"role": "system", "content": random.choice(self.SYSTEM_PROMPTS)})
 
         self._tool_calls_fill(conv)
+        # String arguments that are not valid JSON (e.g. Python ``str(dict)``)
+        # must be coerced before the chat template embeds them raw.
+        normalize_messages_tool_call_arguments(conv)
 
         text = self.tokenizer.apply_chat_template(
             conv,
