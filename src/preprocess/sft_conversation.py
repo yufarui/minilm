@@ -6,6 +6,8 @@ import json
 import re
 from typing import Any
 
+from src.util.tool_call_arguments import normalize_messages_tool_call_arguments
+
 _TOOL_FENCE_RE = re.compile(r"^```(?:json)?\s*|\s*```$", re.MULTILINE)
 
 
@@ -111,6 +113,7 @@ def normalize_messages_tool_calls(
 ) -> tuple[list[dict[str, Any]], int]:
     """
     将 ``assistant.tool_calls`` 从字符串尽量解析为列表；无法解析则移除该键以免下游模板崩溃。
+    同时把各 ``arguments`` 规范成可被 chat template 安全嵌入的 JSON。
     返回 (新消息列表, 成功修复条数)。
     """
     out = []
@@ -133,6 +136,7 @@ def normalize_messages_tool_calls(
             else:
                 del mm["tool_calls"]
         out.append(mm)
+    repaired += normalize_messages_tool_call_arguments(out)
     return out, repaired
 
 

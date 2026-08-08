@@ -10,6 +10,8 @@ from typing import Any
 import jinja2.exceptions
 from transformers.utils.chat_template_utils import render_jinja_template
 
+from src.util.tool_call_arguments import normalize_messages_tool_call_arguments
+
 """
 本文件执行脚本
 uv run src/tokenizer/collect_tokenizer_corpus.py   
@@ -197,6 +199,7 @@ def _build_sft_text(
 
     if not _fill_assistant_tool_calls(conv):
         return None
+    normalize_messages_tool_call_arguments(conv)
 
     try:
         text = _render_chat_template(chat_template, conv, tools)
