@@ -135,6 +135,12 @@ def _parse_tools_from_system(first_message: dict[str, Any]) -> list[dict[str, An
 
 
 def _fill_assistant_tool_calls(conv: list[dict[str, Any]]) -> bool:
+    from src.util.tool_calls_normalize import (
+        normalize_tool_call_item,
+        normalize_tool_calls_list,
+        try_repair_tool_calls_json,
+    )
+
     for msg in conv:
         if not isinstance(msg, dict) or msg.get("role") != "assistant":
             continue
@@ -142,6 +148,10 @@ def _fill_assistant_tool_calls(conv: list[dict[str, Any]]) -> bool:
             continue
         raw = msg["tool_calls"]
         if isinstance(raw, list):
+            coerced = normalize_tool_calls_list(raw)
+            if coerced is None:
+                return False
+            msg["tool_calls"] = coerced
             continue
         if not isinstance(raw, str):
             return False
@@ -149,13 +159,21 @@ def _fill_assistant_tool_calls(conv: list[dict[str, Any]]) -> bool:
         if not s:
             msg["tool_calls"] = []
             continue
-        try:
-            parsed = json.loads(s)
-        except json.JSONDecodeError:
+        parsed, ok = try_repair_tool_calls_json(s)
+        if not ok or parsed is None:
             return False
-        if not isinstance(parsed, list):
+        if isinstance(parsed, list):
+            coerced = normalize_tool_calls_list(parsed)
+            if coerced is None:
+                return False
+            msg["tool_calls"] = coerced
+        elif isinstance(parsed, dict):
+            item = normalize_tool_call_item(parsed)
+            if item is None:
+                return False
+            msg["tool_calls"] = [item]
+        else:
             return False
-        msg["tool_calls"] = parsed
     return True
 
 
