@@ -12,6 +12,11 @@ import torch
 from torch.utils.data import IterableDataset
 
 from src.dataset.pre_train_dataset import PreTrainDataset, _iter_jsonl_objects
+from src.util.tool_calls_normalize import (
+    normalize_tool_call_item,
+    normalize_tool_calls_list,
+    try_repair_tool_calls_json,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -119,11 +124,11 @@ class SFTDataset(IterableDataset):
         )
 
     @staticmethod
-    def _tool_calls_fill(conv: List[Dict[str, Any]]):
+    def _tool_calls_fill(conv: List[Dict[str, Any]]) -> bool:
         """
-        chat_template.jinja 需要 assistant.tool_calls 为列表；
-        JSONL 里常为 JSON 字符串，否则 Jinja 会按字符迭代。
-        若存在非空但非法的 tool_calls JSON，返回 False（应跳过该条样本）。
+        chat_template.jinja 需要 assistant.tool_calls 为「dict 元素」列表。
+        JSONL 里常见：整段 JSON 字符串，或列表元素仍是 JSON 对象字符串。
+        若存在非空但无法规范的 tool_calls，返回 False（调用方应跳过该条样本）。
         """
         for msg in conv:
             if not isinstance(msg, dict) or msg.get("role") != "assistant":
@@ -132,17 +137,50 @@ class SFTDataset(IterableDataset):
                 continue
             raw = msg["tool_calls"]
             if isinstance(raw, list):
+                coerced = normalize_tool_calls_list(raw)
+                if coerced is None:
+                    logger.warning(
+                        "assistant.tool_calls 列表含无法规范的元素，跳过该条"
+                    )
+                    return False
+                msg["tool_calls"] = coerced
                 continue
             if not isinstance(raw, str):
-                logger.warning("assistant.tool_calls 类型无效（%s），跳过该字段", type(raw).__name__)
+                logger.warning(
+                    "assistant.tool_calls 类型无效（%s），跳过该字段",
+                    type(raw).__name__,
+                )
                 msg.pop("tool_calls", None)
                 continue
             s = raw.strip()
-            try:
-                msg["tool_calls"] = json.loads(s)
-            except json.JSONDecodeError as e:
-                logger.warning("assistant.tool_calls JSON 无效，跳过该条: %s", e)
+            if not s:
                 msg.pop("tool_calls", None)
+                continue
+            parsed, ok = try_repair_tool_calls_json(s)
+            if not ok or parsed is None:
+                logger.warning("assistant.tool_calls JSON 无效，跳过该条")
+                return False
+            if isinstance(parsed, list):
+                coerced = normalize_tool_calls_list(parsed)
+                if coerced is None:
+                    logger.warning(
+                        "assistant.tool_calls JSON 列表含无法规范的元素，跳过该条"
+                    )
+                    return False
+                msg["tool_calls"] = coerced
+            elif isinstance(parsed, dict):
+                # 单对象 JSON 字符串规范为单元素列表，避免 Jinja 按 dict key 迭代后崩溃。
+                item = normalize_tool_call_item(parsed)
+                if item is None:
+                    return False
+                msg["tool_calls"] = [item]
+            else:
+                logger.warning(
+                    "assistant.tool_calls JSON 类型无效（%s），跳过该条",
+                    type(parsed).__name__,
+                )
+                return False
+        return True
 
     def _encode_conversation(self, conversations: List[Dict[str, Any]]) -> tuple[list[int], list[int]] | None:
         """返回 (input_ids, labels)；不修改原始样本。"""
@@ -173,15 +211,20 @@ class SFTDataset(IterableDataset):
             if random.random() < self.add_system_ratio:
                 conv.insert(0, {"role": "system", "content": random.choice(self.SYSTEM_PROMPTS)})
 
-        self._tool_calls_fill(conv)
+        if not self._tool_calls_fill(conv):
+            return None
 
-        text = self.tokenizer.apply_chat_template(
-            conv,
-            tokenize=False,
-            add_generation_prompt=False,
-            tools=tools,
-            open_think=False,
-        )
+        try:
+            text = self.tokenizer.apply_chat_template(
+                conv,
+                tokenize=False,
+                add_generation_prompt=False,
+                tools=tools,
+                open_think=False,
+            )
+        except (TypeError, ValueError) as e:
+            logger.warning("apply_chat_template 失败，跳过该条: %s", e)
+            return None
         if not isinstance(text, str):
             logger.warning(
                 "apply_chat_template(tokenize=False) 期望 str，得到 %s，跳过该条",

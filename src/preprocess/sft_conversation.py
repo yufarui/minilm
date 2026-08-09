@@ -3,10 +3,26 @@
 from __future__ import annotations
 
 import json
-import re
 from typing import Any
 
-_TOOL_FENCE_RE = re.compile(r"^```(?:json)?\s*|\s*```$", re.MULTILINE)
+from src.util.tool_calls_normalize import (
+    normalize_tool_call_item,
+    normalize_tool_calls_list,
+    try_repair_tool_calls_json,
+)
+
+# 兼容旧导入路径
+__all__ = [
+    "assistant_contents",
+    "conversation_concat_text",
+    "count_turns",
+    "normalize_messages_tool_calls",
+    "normalize_tool_call_item",
+    "normalize_tool_calls_list",
+    "tool_calls_json_length",
+    "try_repair_tool_calls_json",
+    "validate_role_chain",
+]
 
 
 def conversation_concat_text(messages: list[dict[str, Any]]) -> str:
@@ -62,55 +78,12 @@ def validate_role_chain(messages: list[dict[str, Any]]) -> tuple[bool, str | Non
     return True, None
 
 
-def _strip_json_fences(s: str) -> str:
-    t = s.strip()
-    t = _TOOL_FENCE_RE.sub("", t)
-    return t.strip()
-
-
-def _repair_trailing_commas(s: str) -> str:
-    return re.sub(r",(\s*[\]}])", r"\1", s)
-
-
-def try_repair_tool_calls_json(raw: str) -> tuple[Any | None, bool]:
-    """
-    尝试将 ``tool_calls`` 字符串解析为 JSON（列表或对象）。
-    返回 (解析结果, 是否成功)；失败时结果为 None。
-    """
-    s = _strip_json_fences(raw.strip())
-    if not s:
-        return None, False
-    for _ in range(4):
-        try:
-            return json.loads(s), True
-        except json.JSONDecodeError:
-            s2 = _repair_trailing_commas(s)
-            if s2 == s:
-                break
-            s = s2
-    # 括号补齐（仅当明显缺右括号）
-    open_b = s.count("[")
-    close_b = s.count("]")
-    open_c = s.count("{")
-    close_c = s.count("}")
-    s2 = s
-    if open_b > close_b:
-        s2 += "]" * (open_b - close_b)
-    if open_c > close_c:
-        s2 += "}" * (open_c - close_c)
-    if s2 != s:
-        try:
-            return json.loads(s2), True
-        except json.JSONDecodeError:
-            pass
-    return None, False
-
-
 def normalize_messages_tool_calls(
     messages: list[dict[str, Any]],
 ) -> tuple[list[dict[str, Any]], int]:
     """
-    将 ``assistant.tool_calls`` 从字符串尽量解析为列表；无法解析则移除该键以免下游模板崩溃。
+    将 ``assistant.tool_calls`` 从字符串尽量解析为列表，并规范列表内的 JSON 字符串元素；
+    无法解析则移除该键以免下游模板崩溃。
     返回 (新消息列表, 成功修复条数)。
     """
     out = []
@@ -123,13 +96,26 @@ def normalize_messages_tool_calls(
             raw = mm["tool_calls"]
             if isinstance(raw, str):
                 parsed, ok = try_repair_tool_calls_json(raw)
-                if ok and parsed is not None:
+                if ok and isinstance(parsed, list):
+                    coerced = normalize_tool_calls_list(parsed)
+                    if coerced is not None:
+                        mm["tool_calls"] = coerced
+                        repaired += 1
+                    else:
+                        del mm["tool_calls"]
+                elif ok and parsed is not None:
                     mm["tool_calls"] = parsed
                     repaired += 1
                 else:
                     del mm["tool_calls"]
             elif isinstance(raw, list):
-                pass
+                coerced = normalize_tool_calls_list(raw)
+                if coerced is None:
+                    del mm["tool_calls"]
+                else:
+                    if coerced != raw:
+                        repaired += 1
+                    mm["tool_calls"] = coerced
             else:
                 del mm["tool_calls"]
         out.append(mm)
