@@ -12,6 +12,7 @@ import torch
 from torch.utils.data import IterableDataset
 
 from src.dataset.pre_train_dataset import PreTrainDataset, _iter_jsonl_objects
+from src.util.tools_normalize import coerce_tools_list_elements
 
 logger = logging.getLogger(__name__)
 
@@ -159,7 +160,12 @@ class SFTDataset(IterableDataset):
             raw_tools = first_message.get("tools")
             if raw_tools is not None:
                 if isinstance(raw_tools, list):
-                    tools = raw_tools
+                    tools = coerce_tools_list_elements(raw_tools)
+                    if raw_tools and not tools:
+                        logger.warning(
+                            "system.tools 列表无有效 schema（元素可能是 JSON 字符串/null），跳过该条"
+                        )
+                        return None
                 elif isinstance(raw_tools, str):
                     s = raw_tools.strip()
                     if s:
@@ -168,6 +174,14 @@ class SFTDataset(IterableDataset):
                         except json.JSONDecodeError as e:
                             logger.warning("system.tools JSON 无效，跳过该条: %s", e)
                             return None
+                        if isinstance(tools, list):
+                            coerced = coerce_tools_list_elements(tools)
+                            if tools and not coerced:
+                                logger.warning(
+                                    "system.tools JSON 列表无有效 schema，跳过该条"
+                                )
+                                return None
+                            tools = coerced
 
         if first_message.get("role") != "system":
             if random.random() < self.add_system_ratio:
@@ -175,13 +189,17 @@ class SFTDataset(IterableDataset):
 
         self._tool_calls_fill(conv)
 
-        text = self.tokenizer.apply_chat_template(
-            conv,
-            tokenize=False,
-            add_generation_prompt=False,
-            tools=tools,
-            open_think=False,
-        )
+        try:
+            text = self.tokenizer.apply_chat_template(
+                conv,
+                tokenize=False,
+                add_generation_prompt=False,
+                tools=tools,
+                open_think=False,
+            )
+        except (TypeError, ValueError) as e:
+            logger.warning("apply_chat_template 失败，跳过该条: %s", e)
+            return None
         if not isinstance(text, str):
             logger.warning(
                 "apply_chat_template(tokenize=False) 期望 str，得到 %s，跳过该条",

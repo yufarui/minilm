@@ -10,6 +10,8 @@ from typing import Any
 import jinja2.exceptions
 from transformers.utils.chat_template_utils import render_jinja_template
 
+from src.util.tools_normalize import coerce_tools_list_elements
+
 """
 本文件执行脚本
 uv run src/tokenizer/collect_tokenizer_corpus.py   
@@ -121,16 +123,20 @@ def _parse_tools_from_system(first_message: dict[str, Any]) -> list[dict[str, An
     if raw_tools is None:
         return None
     if isinstance(raw_tools, list):
-        return raw_tools
+        coerced = coerce_tools_list_elements(raw_tools)
+        return coerced or None
     if isinstance(raw_tools, str):
         s = raw_tools.strip()
         if not s:
             return None
         try:
             parsed = json.loads(s)
-            return parsed if isinstance(parsed, list) else None
         except json.JSONDecodeError:
             return None
+        if isinstance(parsed, list):
+            coerced = coerce_tools_list_elements(parsed)
+            return coerced or None
+        return None
     return None
 
 
@@ -200,7 +206,7 @@ def _build_sft_text(
 
     try:
         text = _render_chat_template(chat_template, conv, tools)
-    except jinja2.exceptions.TemplateError:
+    except (jinja2.exceptions.TemplateError, TypeError, ValueError):
         return None
     if not isinstance(text, str):
         return None

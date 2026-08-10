@@ -8,6 +8,8 @@ from typing import Any, Mapping
 from datasets import Dataset, load_dataset
 from transformers import PreTrainedTokenizerBase
 
+from src.util.tools_normalize import coerce_tools_list_elements
+
 logger = logging.getLogger(__name__)
 
 
@@ -50,16 +52,21 @@ class DPODataset:
         if raw is None:
             return None
         if isinstance(raw, list):
-            return raw
+            coerced = coerce_tools_list_elements(raw)
+            return coerced or None
         if isinstance(raw, str):
             s = raw.strip()
             if not s:
                 return None
             try:
-                return json.loads(s)
+                parsed = json.loads(s)
             except json.JSONDecodeError as e:
                 logger.warning("system.tools JSON 无效，将不传 tools: %s", e)
                 return None
+            if isinstance(parsed, list):
+                coerced = coerce_tools_list_elements(parsed)
+                return coerced or None
+            return parsed
         return None
 
     @classmethod
