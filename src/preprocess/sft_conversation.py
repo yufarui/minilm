@@ -111,14 +111,33 @@ def normalize_messages_tool_calls(
 ) -> tuple[list[dict[str, Any]], int]:
     """
     将 ``assistant.tool_calls`` 从字符串尽量解析为列表；无法解析则移除该键以免下游模板崩溃。
+    同时将 ``system.tools`` 列表中的 JSON 字符串元素解析为对象，避免训练时
+    ``apply_chat_template`` 因非 dict schema 直接 ``ValueError``。
     返回 (新消息列表, 成功修复条数)。
     """
+    from src.util.tools_normalize import coerce_tools_list_elements
+
     out = []
     repaired = 0
     for m in messages:
         if not isinstance(m, dict):
             continue
         mm = dict(m)
+        if mm.get("role") == "system" and "tools" in mm:
+            raw_tools = mm["tools"]
+            if isinstance(raw_tools, list):
+                coerced = coerce_tools_list_elements(raw_tools)
+                if coerced != raw_tools:
+                    mm["tools"] = coerced
+                    repaired += 1
+            elif isinstance(raw_tools, str):
+                s = raw_tools.strip()
+                if s:
+                    parsed, ok = try_repair_tool_calls_json(s)
+                    if ok and isinstance(parsed, list):
+                        coerced = coerce_tools_list_elements(parsed)
+                        mm["tools"] = coerced
+                        repaired += 1
         if mm.get("role") == "assistant" and "tool_calls" in mm:
             raw = mm["tool_calls"]
             if isinstance(raw, str):
