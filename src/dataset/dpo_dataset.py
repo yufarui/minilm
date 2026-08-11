@@ -5,7 +5,7 @@ import logging
 from pathlib import Path
 from typing import Any, Mapping
 
-from datasets import Dataset, load_dataset
+from datasets import Dataset, Features, Value, load_dataset
 from transformers import PreTrainedTokenizerBase
 
 from src.util.message_roles import materialize_reasoning_content, normalize_developer_roles
@@ -151,8 +151,20 @@ class DPODataset:
                 "rejected": str(r_raw),
             }
 
-        drop = [c for c in ds.column_names if c not in cls.OUTPUT_COLUMNS]
-        return ds.map(_row_to_trl, remove_columns=drop)
+        # Chat rows with extra keys (reasoning_content / tool_calls) infer List(Json);
+        # overwriting chosen/rejected with strings without Features casts them to char lists.
+        string_features = Features(
+            {
+                "prompt": Value("string"),
+                "chosen": Value("string"),
+                "rejected": Value("string"),
+            }
+        )
+        return ds.map(
+            _row_to_trl,
+            remove_columns=list(ds.column_names),
+            features=string_features,
+        )
 
     def as_hf_dataset(self) -> Dataset:
         return self.dataset
