@@ -10,6 +10,8 @@ from typing import Any
 import jinja2.exceptions
 from transformers.utils.chat_template_utils import render_jinja_template
 
+from src.util.message_roles import materialize_reasoning_content, normalize_developer_roles
+
 """
 本文件执行脚本
 uv run src/tokenizer/collect_tokenizer_corpus.py   
@@ -183,6 +185,9 @@ def _build_sft_text(
     conv = copy.deepcopy(conversations)
     if not conv:
         return None
+
+    normalize_developer_roles(conv)
+    materialize_reasoning_content(conv, open_think=False)
 
     first_message = conv[0]
     if first_message.get("role") == "system" and not first_message.get("content"):

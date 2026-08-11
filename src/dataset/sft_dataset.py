@@ -12,6 +12,7 @@ import torch
 from torch.utils.data import IterableDataset
 
 from src.dataset.pre_train_dataset import PreTrainDataset, _iter_jsonl_objects
+from src.util.message_roles import materialize_reasoning_content, normalize_developer_roles
 
 logger = logging.getLogger(__name__)
 
@@ -149,6 +150,10 @@ class SFTDataset(IterableDataset):
         conv = copy.deepcopy(conversations)
         if not conv:
             return None
+
+        # open_think=False：空 content + reasoning_content 会变成空 assistant 监督；developer 会被模板丢弃。
+        normalize_developer_roles(conv)
+        materialize_reasoning_content(conv, open_think=False)
 
         first_message = conv[0]
         if first_message.get("role") == "system" and not first_message.get("content"):

@@ -46,6 +46,7 @@ from src.preprocess.text_quality.tokens import (
     top_token_entries,
 )
 from src.ref_model import get_auto_tokenizer_local
+from src.util.message_roles import materialize_reasoning_content, normalize_developer_roles
 from src.util.path_util import resolve_under_project
 
 logger = logging.getLogger(__name__)
@@ -233,6 +234,9 @@ class SftPreprocessPipeline:
                 continue
 
             messages = copy.deepcopy(conv)
+            # developer → system；空 content 的 reasoning_content 并入 content（与 train open_think=False 对齐）。
+            normalize_developer_roles(messages)
+            materialize_reasoning_content(messages, open_think=False)
             if self.cfg.drop_think_samples:
                 marker_hit = False
                 markers = [m for m in self.cfg.think_markers if isinstance(m, str) and m]
