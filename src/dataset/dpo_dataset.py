@@ -8,6 +8,8 @@ from typing import Any, Mapping
 from datasets import Dataset, load_dataset
 from transformers import PreTrainedTokenizerBase
 
+from src.util.message_roles import materialize_reasoning_content, normalize_developer_roles
+
 logger = logging.getLogger(__name__)
 
 
@@ -74,8 +76,15 @@ class DPODataset:
         if chosen[-1].get("role") != "assistant" or rejected[-1].get("role") != "assistant":
             raise ValueError("chosen 与 rejected 的最后一条须为 role=assistant。")
 
-        prefix_c = [dict(m) for m in chosen[:-1]]
-        prefix_r = [dict(m) for m in rejected[:-1]]
+        chosen_msgs = [dict(m) for m in chosen]
+        rejected_msgs = [dict(m) for m in rejected]
+        normalize_developer_roles(chosen_msgs)
+        normalize_developer_roles(rejected_msgs)
+        materialize_reasoning_content(chosen_msgs, open_think=False)
+        materialize_reasoning_content(rejected_msgs, open_think=False)
+
+        prefix_c = chosen_msgs[:-1]
+        prefix_r = rejected_msgs[:-1]
         if len(prefix_c) != len(prefix_r):
             logger.warning(
                 "chosen/rejected 前缀轮数不一致 (chosen=%s rejected=%s)，以 chosen 前缀生成 prompt。",
@@ -103,8 +112,8 @@ class DPODataset:
 
         return {
             "prompt": prompt,
-            "chosen": str(chosen[-1]["content"]),
-            "rejected": str(rejected[-1]["content"]),
+            "chosen": str(chosen_msgs[-1].get("content") or ""),
+            "rejected": str(rejected_msgs[-1].get("content") or ""),
         }
 
     @classmethod
