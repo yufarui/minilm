@@ -8,6 +8,8 @@ from typing import Any, Mapping
 from datasets import Dataset, load_dataset
 from transformers import PreTrainedTokenizerBase
 
+from src.util.message_content import normalize_messages_content
+
 logger = logging.getLogger(__name__)
 
 
@@ -90,6 +92,10 @@ class DPODataset:
                     )
                     break
 
+        prefix_c, _ = normalize_messages_content(prefix_c)
+        if prefix_c is None:
+            raise ValueError("DPO chosen 前缀 content 无法规范为字符串。")
+
         tools = cls._tools_from_messages(prefix_c)
         prompt = tokenizer.apply_chat_template(
             prefix_c,
@@ -101,10 +107,25 @@ class DPODataset:
         if not isinstance(prompt, str):
             prompt = tokenizer.decode(prompt) if hasattr(prompt, "tolist") else str(prompt)
 
+        # 最终 assistant 的 dict/scalar content 也须可序列化；避免 str(dict) 的 Python repr。
+        chosen_tail, _ = normalize_messages_content([dict(chosen[-1])])
+        rejected_tail, _ = normalize_messages_content([dict(rejected[-1])])
+        if chosen_tail is None or rejected_tail is None:
+            raise ValueError("DPO chosen/rejected 最终 assistant content 无法规范为字符串。")
+
+        def _as_completion_text(msg: dict[str, Any]) -> str:
+            c = msg.get("content", "")
+            if isinstance(c, str):
+                return c
+            if c is None:
+                return ""
+            # list（multipart）等仍走 str；由其它修复完整处理。
+            return str(c)
+
         return {
             "prompt": prompt,
-            "chosen": str(chosen[-1]["content"]),
-            "rejected": str(rejected[-1]["content"]),
+            "chosen": _as_completion_text(chosen_tail[0]),
+            "rejected": _as_completion_text(rejected_tail[0]),
         }
 
     @classmethod

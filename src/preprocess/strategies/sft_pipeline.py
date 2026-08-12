@@ -31,6 +31,7 @@ from src.preprocess.sft_conversation import (
     tool_calls_json_length,
     validate_role_chain,
 )
+from src.util.message_content import normalize_messages_content
 from src.preprocess.stats_types import SftPreprocessStats
 from src.preprocess.text_quality.length import equal_width_histogram
 from src.preprocess.text_quality.pipeline import (
@@ -233,6 +234,11 @@ class SftPreprocessPipeline:
                 continue
 
             messages = copy.deepcopy(conv)
+            # dict/scalar content 在 chat_template 中会被清空；先序列化再清洗/落盘。
+            messages, _n_content = normalize_messages_content(messages)
+            if messages is None:
+                stats.skipped_empty_conversations += 1
+                continue
             if self.cfg.drop_think_samples:
                 marker_hit = False
                 markers = [m for m in self.cfg.think_markers if isinstance(m, str) and m]

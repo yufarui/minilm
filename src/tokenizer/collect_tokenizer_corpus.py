@@ -180,8 +180,14 @@ def _build_sft_text(
     add_system_ratio: float,
     rng: random.Random,
 ) -> str | None:
+    from src.util.message_content import normalize_messages_content
+
     conv = copy.deepcopy(conversations)
     if not conv:
+        return None
+
+    conv, _ = normalize_messages_content(conv)
+    if conv is None:
         return None
 
     first_message = conv[0]
