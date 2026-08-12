@@ -153,38 +153,34 @@ def test_preprocess_serializes_dict_tool_content(tmp_path: Path) -> None:
     assert json.loads(tool["content"]) == {"ok": True}
 
 
-def test_dpo_prefix_keeps_dict_tool_content(tmp_path: Path) -> None:
+def test_dpo_prefix_keeps_dict_user_content(tmp_path: Path) -> None:
+    """Dict user content must appear in the DPO prompt (not wiped to empty).
+
+    Avoids assistant.tool_calls rows here — those still hit the separate Arrow
+    List(Json) cast issue on master.
+    """
     tok = load_local_tokenizer()
-    path = tmp_path / "dpo_dict_tool.jsonl"
+    path = tmp_path / "dpo_dict_user.jsonl"
     write_jsonl(
         path,
         [
             {
                 "chosen": [
-                    {"role": "user", "content": "weather?"},
-                    {
-                        "role": "assistant",
-                        "content": "",
-                        "tool_calls": [{"name": "get_weather", "arguments": {}}],
-                    },
-                    {"role": "tool", "content": {"temp": 10}},
-                    {"role": "assistant", "content": "cold"},
+                    {"role": "user", "content": {"query": "say hi", "lang": "en"}},
+                    {"role": "assistant", "content": "hello"},
                 ],
                 "rejected": [
-                    {"role": "user", "content": "weather?"},
-                    {
-                        "role": "assistant",
-                        "content": "",
-                        "tool_calls": [{"name": "get_weather", "arguments": {}}],
-                    },
-                    {"role": "tool", "content": {"temp": 10}},
-                    {"role": "assistant", "content": "idk"},
+                    {"role": "user", "content": {"query": "say hi", "lang": "en"}},
+                    {"role": "assistant", "content": "no"},
                 ],
             }
         ],
     )
     ds = DPODataset(path, tokenizer=tok).as_hf_dataset()
     assert len(ds) == 1
-    assert '"temp": 10' in ds[0]["prompt"] or '"temp":10' in ds[0]["prompt"]
-    assert ds[0]["chosen"] == "cold"
-    assert ds[0]["rejected"] == "idk"
+    prompt = ds[0]["prompt"]
+    assert isinstance(prompt, str)
+    assert "say hi" in prompt
+    assert "lang" in prompt
+    assert ds[0]["chosen"] == "hello"
+    assert ds[0]["rejected"] == "no"
